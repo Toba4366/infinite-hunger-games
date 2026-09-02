@@ -1,0 +1,42 @@
+[project]
+name = "hunger_games"
+version = "0.3.0"
+description = "A Hunger Games simulator, dashboard and research toolkit based on the Infinite Hunger Games video"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "matplotlib>=3.7", "pandas>=1.5", "pillow>=9", "dearpygui>=1.11"]
+
+[tool.ruff]
+# One style everywhere: 120 columns, Python 3.10 syntax.
+line-length = 120
+target-version = "py310"
+# Generated data, virtual environments and results are not code.
+extend-exclude = ["output", "results", "docs", ".venv"]
+
+[tool.ruff.lint]
+# pycodestyle (E, W), pyflakes (F), isort (I), bugbear (B), pyupgrade (UP), naming (N), docstrings (D).
+select = ["E", "F", "W", "I", "B", "UP", "N", "D"]
+ignore = [
+    "D203",  # one blank line before a class docstring (conflicts with D211)
+    "D213",  # summary on the second line (conflicts with D212)
+    "D107",  # __init__ docstrings are covered by the class docstring
+    "D105",  # magic methods need no docstring
+    "D401",  # imperative mood is not enforced
+    "E741",  # short variable names like `l` are used deliberately in a few loops
+    "B023",  # closures in the dashboard bind loop variables on purpose via default args
+    "E501",  # the formatter sets line length; long strings, comments and tooltips are allowed to overflow
+    "D205",  # docstrings may run their summary over several lines
+    "D415",  # docstring summaries need not end in a full stop
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are documented by their docs pages; helper functions may skip docstrings.
+"tests/*" = ["D103", "D100"]
+# Experiment scripts insert the repo root before importing the package.
+"experiments/*" = ["E402"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
