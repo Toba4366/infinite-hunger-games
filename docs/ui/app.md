@@ -1,21 +1,22 @@
 # `app.py`
 
 **Source:** [hunger_games/ui/app.py](../../hunger_games/ui/app.py)
-**Depends on:** `time`, `pathlib.Path`, `dearpygui.dearpygui as dpg`, `numpy`; project modules [../brain/init.md](../brain/init.md) (`BRAIN_REGISTRY`), [../brain/initializers.md](../brain/initializers.md) (`ACTIVATIONS`, `INITIALIZER_NOTES`, `INITIALIZERS`), [../brain/neural.md](../brain/neural.md) (`MENU_NAMES`, `MENU_SIZE`, `NeuralBrain`), [../brain/voting.md](../brain/voting.md) (`GENE_NAMES`), [../config.md](../config.md) (`ArenaShape`, `LayoutName`, `NeuralConfig`), [../districts.md](../districts.md) (`DISTRICT_INDUSTRIES`, `SEXES`), [../perception.md](../perception.md) (`VECTOR_NAMES`, `VECTOR_SIZE`), `research/experiments.py` (`SweepConfig`), `research/telemetry.py` (`NEED_BIN_LABELS`), [../resources.md](../resources.md) (`ResourceKind`, `weapon_name`), [../terrain.md](../terrain.md) (`TerrainType`), [../training/init.md](../training/init.md) (`RLConfig`, `TrainingConfig`), [canvas.md](canvas.md) (`ArenaCanvas`), [painter.md](painter.md) (`MapPainter.PRESETS`), [session.md](session.md) (`Session`), [visualizer.md](visualizer.md) (`NetworkVisualizer`)
-**Used by:** [init.md](init.md) (`launch` builds a `Dashboard`)
+**Depends on:** `time`, `pathlib.Path`, `dearpygui.dearpygui as dpg`, `numpy`; project modules [../brain/init.md](../brain/init.md) (`BRAIN_REGISTRY`), [../brain/initializers.md](../brain/initializers.md) (`ACTIVATIONS`, `INITIALIZER_NOTES`, `INITIALIZERS`), [../brain/neural.md](../brain/neural.md) (`MENU_NAMES`, `MENU_SIZE`, `NeuralBrain`), [../brain/voting.md](../brain/voting.md) (`GENE_NAMES`), [../config.md](../config.md) (`ArenaShape`, `LayoutName`, `NeuralConfig`), [../districts.md](../districts.md) (`DISTRICT_INDUSTRIES`, `SEXES`), [../perception.md](../perception.md) (`VECTOR_NAMES`, `VECTOR_SIZE`), [../research/experiments.md](../research/experiments.md) (`SweepConfig`), [../research/telemetry.md](../research/telemetry.md) (`NEED_BIN_LABELS`), [../resources.md](../resources.md) (`ResourceKind`, `weapon_name`), [../terrain.md](../terrain.md) (`TerrainType`), [../training/init.md](../training/init.md) (`RLConfig`, `TrainingConfig`), [canvas.md](canvas.md) (`ArenaCanvas`), [painter.md](painter.md) (`MapPainter.PRESETS`), [session.md](session.md) (`Session`), [visualizer.md](visualizer.md) (`NetworkVisualizer`)
+**Used by:** [init.md](init.md) (`launch` builds a `Dashboard`), [screenshots.md](screenshots.md) (builds a `Dashboard` by hand and calls `_tutorial_action`)
 
 ## Purpose
 
-`app.py` is the window. One primary window fills the viewport and holds three child panels that resize with it: control tabs on the left (Setup, Map, Loot, Tributes, Brains, Play, Train, Research), the arena with a transport bar in the centre, and Inspector, Network and Charts tabs on the right. Every widget callback changes the [`Session`](session.md) or a tool setting on the `Dashboard`; every frame `on_frame` advances playback and refreshes everything that changes. Nothing here simulates, paints or trains.
+`app.py` is the window. One primary window fills the viewport and holds three child panels that resize with it: control tabs on the left (Tutorial, Setup, Map, Loot, Tributes, Brains, Play, Train, Research), the arena with a transport bar in the centre, and Inspector, Network and Charts tabs on the right. Every widget callback changes the [`Session`](session.md) or a tool setting on the `Dashboard`; every frame `on_frame` advances playback and refreshes everything that changes. Nothing here simulates, paints or trains.
 
 ## Concepts you need
 
 - **Context, viewport, frame loop.** `dpg.create_context()` initialises Dear PyGui, `dpg.create_viewport(...)` is the OS window, widgets are built before `dpg.setup_dearpygui()`, and `dpg.show_viewport()` displays it. The loop calls `dpg.render_dearpygui_frame()` until `dpg.is_dearpygui_running()` is false. It is written by hand so `on_frame()` runs before every render.
 - **Primary window and child windows.** `dpg.set_primary_window("root", True)` makes one window fill the viewport. `dpg.child_window` is a resizable, scrollable box inside it; the three panels are child windows whose sizes `_layout` recomputes from `dpg.get_viewport_client_width()` and `..._height()` on every resize.
-- **Tags.** Any widget can have `tag="..."`. `dpg.get_value`, `dpg.set_value` and `dpg.configure_item` address it later. Every widget this file updates has a tag; they are listed per tab below.
+- **Tags.** Any widget can have `tag="..."`. `dpg.get_value`, `dpg.set_value` and `dpg.configure_item` address it later. Every widget this file updates has a tag; they are listed per tab below. Tab bars and tabs are tagged too: `dpg.set_value("left_tabs", "tab_map")` switches the left panel to the Map tab. The tutorial and the screenshot tool use that.
 - **Callbacks.** A callback is called as `callback(sender, app_data, user_data)`, but Dear PyGui passes only as many as the function accepts, so callbacks here take `()`, `(s, a)` or `(sender, value, player_id)`. `app_data` is the new value, or a dictionary for a file dialog.
 - **Callback factories.** `_setter`, `setter`, `ga`, `rl` and `rw` return callbacks bound to one attribute name; `lambda s, a, u=speed: ...` inside a loop freezes `speed` per button. `_tip` attaches a tooltip to the widget created just before it.
-- **Collapsing headers, groups, tables, plots.** `dpg.collapsing_header` folds a section. `dpg.group(tag=...)` with `show=False` hides a block. A table has columns in slot 0 and rows in slot 1. A plot holds axes; line, bar and heat series are children of the Y axis; `dpg.set_value(series, [xs, ys])` replaces the data and `dpg.fit_axis_data(axis)` rescales.
+- **Collapsing headers, groups, tables, plots.** `dpg.collapsing_header` folds a section. `dpg.group(tag=...)` with `show=False` hides a block; `dpg.delete_item(tag, children_only=True)` empties a group so it can be refilled. A table has columns in slot 0 and rows in slot 1. A plot holds axes; line, bar and heat series are children of the Y axis; `dpg.set_value(series, [xs, ys])` replaces the data and `dpg.fit_axis_data(axis)` rescales.
+- **Heat series.** `dpg.add_heat_series(values, rows, cols, ...)` draws a matrix as coloured cells; the plot's colormap (`dpg.bind_colormap`) maps `scale_min..scale_max` to colours. A heat series cannot change its row count after creation, so the evolution heat map is deleted and recreated each time a step is added.
 - **Handler registry and threads.** `dpg.handler_registry()` catches mouse down (fires every frame while held), release and click events that are not tied to a widget. Training and sweeps run in session threads; this file only polls each frame and never blocks.
 
 ## Walkthrough
@@ -66,7 +67,7 @@ Creates `session = Session()`, `canvas = ArenaCanvas(session)`, `visualizer = Ne
 
 `def run(self) -> None`
 
-Creates the context, loads the font and theme, creates the viewport (title "Infinite Hunger Games - Game Makers' Dashboard", 1500 by 920, minimum 1100 by 700), calls `build()`, registers the three mouse handlers, sets `_layout` as the viewport resize callback, sets up and shows the viewport, runs `_layout()` once, then loops `on_frame()` and `render_dearpygui_frame()` until the window closes. Destroys the context at the end.
+Creates the context, loads the font and theme, creates the viewport (title "Infinite Hunger Games - Game Makers' Dashboard", 1500 by 920, minimum 1100 by 700), calls `build()`, registers the three mouse handlers, sets `_layout` as the viewport resize callback, sets up and shows the viewport, runs `_layout()` once, then loops `on_frame()` and `render_dearpygui_frame()` until the window closes. Destroys the context at the end. [screenshots.md](screenshots.md) repeats these steps by hand, without the mouse handlers, so it can render frames one at a time.
 
 #### `Dashboard._load_font`, `Dashboard._apply_theme`
 
@@ -86,9 +87,26 @@ Lays out the primary window `root` (no title bar, not resizable or movable, no s
 
 | Panel | Tag | Contents |
 | --- | --- | --- |
-| Left | `left_panel` | "Mouse tool" radio button over `TOOLS`, a separator, then a tab bar: Setup, Map, Loot, Tributes, Brains, Play, Train, Research |
+| Left | `left_panel` | "Mouse tool" radio button over `TOOLS`, a separator, then the tab bar `left_tabs` |
 | Centre | `center_panel` | `canvas.build("center_panel")` then `_build_transport()` |
-| Right | `right_panel` | Tab bar: Inspector, Network (tag `network_tab`), Charts |
+| Right | `right_panel` | The tab bar `right_tabs` |
+
+The tabs are tagged so code can switch to them with `dpg.set_value(<tab bar>, <tab tag>)`:
+
+| Tab bar | Tab | Tag | Built by |
+| --- | --- | --- | --- |
+| `left_tabs` | Tutorial | `tab_tutorial` | `_build_tutorial` |
+| | Setup | `tab_setup` | `_build_setup` |
+| | Map | `tab_map` | `_build_map` |
+| | Loot | `tab_loot` | `_build_loot` |
+| | Tributes | `tab_tributes` | `_build_tributes` |
+| | Brains | `tab_brains` | `_build_brains` |
+| | Play | `tab_play` | `_build_play` |
+| | Train | `tab_train` | `_build_train` |
+| | Research | `tab_research` | `_build_research` |
+| `right_tabs` | Inspector | `tab_inspector` | `_build_inspector` |
+| | Network | `tab_network` | `_build_network` |
+| | Charts | `tab_charts` | `_build_charts` |
 
 Ends with `dpg.set_primary_window("root", True)`.
 
@@ -102,7 +120,50 @@ Reads the viewport client size. `panel_height = max(400, height - 60)`; `left = 
 
 `def on_frame(self) -> None`
 
-Every frame: delta time capped at 0.25 s; `session.update(seconds)`; auto-next (if `auto_next`, the game is over, the playhead is at the live edge, playback stopped and `auto_next_box` is ticked, start a new game and play); brush preview (`canvas.brush_preview = (x, y, brush_radius)` when the Paint terrain tool hovers a cell, else `None`); `canvas.render()`; then `_refresh_transport`, `_refresh_inspector`, `_refresh_network`, `_refresh_training`, `_refresh_research`; `_refresh_charts` every 30th frame; finally `status_text`.
+Every frame: delta time capped at 0.25 s; `session.update(seconds)` (which first advances the training feed, then playback); auto-next (if `auto_next`, the game is over, the playhead is at the live edge, playback stopped and `auto_next_box` is ticked, start a new game and play); brush preview (`canvas.brush_preview = (x, y, brush_radius)` when the Paint terrain tool hovers a cell, else `None`); `canvas.render()`; then `_refresh_transport`, `_refresh_inspector`, `_refresh_network`, `_refresh_training`, `_refresh_research`; `_refresh_charts` every 30th frame; finally `status_text`.
+
+#### `Dashboard.TUTORIAL_STEPS`
+
+A class attribute: a list of `(title, text, action)` tuples, one per tutorial step. `action` is a short name handed to `_tutorial_action`, or `None` for a step with no button.
+
+| Title | Action | What the text says |
+| --- | --- | --- |
+| Welcome | `None` | The three panels, tooltips, how the "Show me" buttons work, and that the written version is `docs/tutorial/README.md` |
+| 1. Build an arena | `"arena"` | Setup picks shape, layout and size; Map loads presets and paints. Show me loads `lake_island` |
+| 2. Paint terrain | `"paint"` | Pick Paint terrain, choose terrain and radius, drag; tributes are moved off void |
+| 3. Edit the tributes | `"tributes"` | The roster table and editor; podium presets or the Move tribute tool |
+| 4. Place loot | `"loot"` | Kind, quantity, quality; left-click places, right-click removes; marker shapes |
+| 5. Play a game | `"play"` | New game records every tick; the transport bar; circles are female, squares male |
+| 6. Inspect and watch a network think | `"network"` | The Inspector, and the Network tab for neural tributes. Show me gives everyone a neural brain and starts a game |
+| 7. Train and watch training | `"train"` | Genetic or reinforce; the training feed's `replay` and `live` modes. Show me starts a short evolution of voting brains |
+| 8. Research | `"research"` | Sweeps and behaviour chart exports; run folders under `results/` |
+| 9. Save and share | `"files"` | Where each file is saved; the docs folder |
+
+#### `Dashboard._build_tutorial`
+
+`def _build_tutorial(self) -> None`
+
+One collapsing header per step, labelled with the title; the first two (Welcome and step 1) start open. Each holds the text (wrapped at 360) and, when the step has an action, a "Show me" button whose callback is `lambda s, a, u=action: self._tutorial_action(u)`. The default argument freezes the action name per button.
+
+#### `Dashboard._tutorial_action`
+
+`def _tutorial_action(self, name: str) -> None`
+
+Performs one step with the same session and dashboard methods the real controls use, then switches to the tab where the step lives.
+
+| `name` | What it does | Tabs shown |
+| --- | --- | --- |
+| `"arena"` | `session.apply_preset("lake_island")`, `session.reposition_off_void()` | `tab_map` |
+| `"paint"` | `tool = "Paint terrain"` | `tab_map` |
+| `"tributes"` | `_select(first tribute's id)` if the roster is not empty | `tab_tributes` |
+| `"loot"` | `tool = "Place loot"` | `tab_loot` |
+| `"play"` | `tool = "Select"`, `session.new_game()`, `_set_speed(8.0)`, `session.playing = True` | `tab_play` |
+| `"network"` | `config.brain_name = "neural"`, `cfg_brain` set to `neural`, `_on_brain_all()` (every tribute becomes neural and drops any genome), `session.new_game()`, `_set_speed(4.0)`, play, select the first tribute | `tab_network` on the right, `tab_brains` on the left |
+| `"train"` | `self.ga = TrainingConfig(brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1)`, `session.feed_mode = "live"`, `feed_mode` radio set to `live`, `_on_start_training()` | `tab_train` |
+| `"research"` | Nothing else | `tab_research` |
+| `"files"` | Nothing else | `tab_play` |
+
+Any other name does nothing. Note that `"train"` starts whichever method the Train tab's radio button currently shows: `_on_start_training` reads `self.method`, so with `reinforce` selected the new `self.ga` is ignored and a reinforce run starts from `self.rl`.
 
 #### `Dashboard._setter`
 
@@ -209,7 +270,7 @@ Podium presets: combo `podium_preset` over `Session.PODIUM_PRESETS` (default `ed
 
 `def _rebuild_roster_table(self) -> None`
 
-Deletes the rows (slot 1) and adds one `table_row` per tribute: a selectable spanning the columns (callback `_on_select_row`, `user_data=player_id`, highlighted when selected), district, sex, score, and the brain name with ` *` when a genome is stored.
+Deletes the rows (slot 1) and adds one `table_row` per tribute: a selectable spanning the columns (callback `_on_select_row`, `user_data=player_id`, highlighted when selected), district, sex, score, and the brain name with ` *` when a genome is stored. Does nothing if `roster_table` does not exist yet.
 
 #### `Dashboard._on_select_row`, `Dashboard._select`
 
@@ -227,9 +288,11 @@ Add: `session.add_tribute()` then select it. Remove: `session.remove_tribute(sel
 | --- | --- | --- |
 | default brain (combo over `BRAIN_REGISTRY`: voting, random, neural) | `cfg_brain` | `config.brain_name` |
 | Give this brain to every tribute | | `_on_brain_all` |
-| hidden layers | `nn_layers` | text, comma-separated widths, default `16` |
-| activation | `nn_activation` | combo over `ACTIVATIONS` |
-| initializer | `nn_init` | combo over `INITIALIZERS`; updates the note |
+| shape line | | text "50 inputs (the perception) -> hidden layers -> 16 outputs (the action menu)" |
+| number of hidden layers | `nn_layer_count` | int 1..6, clamped; default `len(config.neural.hidden_layers)`, which is 1; callback `_on_layer_count` |
+| nodes in hidden layer N (one field per layer) | `nn_width_0`, `nn_width_1`, ... inside the group `nn_widths_group` | int 1..512, clamped; defaults from `config.neural.hidden_layers`, so one field of 16 |
+| activation | `nn_activation` | combo over `ACTIVATIONS`, default `tanh` |
+| initializer | `nn_init` | combo over `INITIALIZERS`, default `xavier_uniform`; updates the note |
 | initializer note | `nn_init_note` | `INITIALIZER_NOTES[name]` |
 | init scale | `nn_scale` | float, default 0.05 |
 | sparsity | `nn_sparsity` | float 0.01..1, default 0.1 |
@@ -237,11 +300,39 @@ Add: `session.add_tribute()` then select it. Remove: `session.remove_tribute(sel
 | summary | `nn_summary` | the network's `describe()` |
 | Inputs (50) and outputs (16) header | | lists `VECTOR_NAMES` and `MENU_NAMES` with their indices |
 
+The width fields are created by `_rebuild_width_fields(list(n.hidden_layers))` right after the empty `nn_widths_group` is made. The width fields have no callbacks: nothing reaches the config until "Apply network settings" is pressed. `_on_apply_neural()` is called once at the end of the build so the summary is filled in.
+
 The 50 inputs, in order: thirst, hunger, health, survival score, training score, weapon quality, reach, food carried, medkits carried, in water, hunt difficulty, downhill dx/dy, water dx/dy/distance, grass dx/dy/distance, centre dx/dy/distance, loot here kind/qty/quality, nearby loot dx/dy/distance/kind, threat dx/dy/distance/level/health, players in sight, in danger zone, hazard distance, hazard closing, safe dx/dy, day fraction, alive fraction, field known, field strength, strongest remaining, my rank, on water/sand/grass/rock. The 16 outputs: rest, drink, eat, hunt, pick_up, heal, attack, flee, and eight moves (up-left, up, up-right, left, right, down-left, down, down-right).
 
-#### `Dashboard._on_brain_all`, `Dashboard._on_apply_neural`
+#### `Dashboard._on_brain_all`
 
-`_on_brain_all()` sets every spec's `brain_name` to the default and `genome` to `None`. `_on_apply_neural()` parses `nn_layers` (bad input writes a message into `nn_summary`), builds `config.neural = NeuralConfig(hidden_layers or (16,), activation, initializer, init_scale, sparsity)`, and shows a sample brain's `describe()`, for example `50 -> 16 -> 16, tanh, xavier_uniform, 1088 params`. Also called at build time and after loading a config.
+`def _on_brain_all(self) -> None`
+
+Sets every spec's `brain_name` to `config.brain_name` and `genome` to `None`, then rebuilds the table.
+
+#### `Dashboard._rebuild_width_fields`
+
+`def _rebuild_width_fields(self, widths: list[int]) -> None`
+
+Empties `nn_widths_group` (`dpg.delete_item(..., children_only=True)`) and adds one `dpg.add_input_int` per entry of `widths`, labelled "nodes in hidden layer 1", "nodes in hidden layer 2" and so on, tagged `nn_width_0`, `nn_width_1`, ..., each clamped to 1..512 and parented to the group. Called at build time, when the layer count changes and after Load config.
+
+#### `Dashboard._on_layer_count`
+
+`def _on_layer_count(self, sender, count) -> None`
+
+The callback of `nn_layer_count`. Reads the widths typed so far with `_read_widths()`, then builds the new list as `(current + [16] * count)[:count]`: existing widths are kept in order, extra layers start at 16 nodes, and surplus layers are dropped from the end. Rebuilds the fields with `_rebuild_width_fields`.
+
+#### `Dashboard._read_widths`
+
+`def _read_widths(self) -> list[int]`
+
+Collects `int(dpg.get_value(f"nn_width_{index}"))` for `index = 0, 1, 2, ...` until a tag does not exist. Returns the list, so `[32, 16]` for two fields holding 32 and 16.
+
+#### `Dashboard._on_apply_neural`
+
+`def _on_apply_neural(self) -> None`
+
+Reads the widths into a tuple and replaces `config.neural` with `NeuralConfig(hidden_layers=layers or (16,), activation=nn_activation, initializer=nn_init, init_scale=float(nn_scale), sparsity=float(nn_sparsity))`. Then builds a sample `NeuralBrain(config=..., rng=default_rng(0))` and writes "Network: " plus its `describe()` into `nn_summary`, for example `Network: 50 -> 16 -> 16, tanh, xavier_uniform, 1088 params`. Also called at build time and after loading a config.
 
 #### `Dashboard._build_play`
 
@@ -290,7 +381,9 @@ A radio button `genetic` / `reinforce` (`_on_method`), then two groups of which 
 | | placement | `reward.placement` | 0..10, default 2 |
 | | discount | `reward.discount` | 0.8..1, default 0.98 |
 
-Below the groups: "Start training" (`train_start`) and "Stop after this step"; progress bar `train_progress`; summary `train_summary`; four plots; champion buttons "Champion to all", "Champion to selected", "Watch champion"; the run name field `run_name` (default `run`) with "Save run folder"; and "Save champion" / "Load champion into all" (`.json`).
+Below the groups: "Start training" (`train_start`) and "Stop after this step"; progress bar `train_progress`; summary `train_summary`; the training feed; four plots; champion buttons "Champion to all", "Champion to selected", "Watch champion"; the run name field `run_name` (default `run`) with "Save run folder"; and "Save champion" / "Load champion into all" (`.json`).
+
+The training feed is a horizontal group: the text "Training feed" and a radio button tagged `feed_mode` over `Session.FEED_MODES` (`off`, `replay`, `live`), default `session.feed_mode` (which starts as `off`). Its callback sets `session.feed_mode`. The tooltip explains: `replay` replays one real evaluation game from every step (the population playing itself); `live` gives the newest champion to the learner slots and plays a fresh game live so the Network tab shows real activations; the next step is shown when the current game ends. The feed itself is driven by `Session._advance_feed` (see [session.md](session.md)).
 
 | Plot | Tag | Axes | Series |
 | --- | --- | --- | --- |
@@ -321,7 +414,7 @@ Each frame: the progress bar shows games done in the current step with overlay "
 | Time per step | seconds per generation | seconds per epoch |
 | Champion genes | latest champion's values, gold where changed since the previous step; first 400 genes; gene names on the axis for the voting brain | same, from the latest epoch's policy |
 
-The summary line reads, for genetic, "N generation(s), Ts total. Best fitness x (gen g), validation y." and for reinforce "N epoch(s), Ts total. Train return x, validation y, survival t ticks, win rate w, entropy e."
+After the timing bars it calls `_refresh_evolution()` so the Network tab's evolution plots grow with the same step. The summary line reads, for genetic, "N generation(s), Ts total. Best fitness x (gen g), validation y." and for reinforce "N epoch(s), Ts total. Train return x, validation y, survival t ticks, win rate w, entropy e."
 
 #### `Dashboard._build_research`
 
@@ -367,7 +460,7 @@ Under the arena: buttons New game, Play (`play_button`, width 70), Step, To end,
 
 `def _refresh_transport(self) -> None`
 
-Fills `loot_count`, `loot_weapon_name` and `map_coverage`; labels the play button "Pause" or "Play"; without a recording the headline says "No game yet. Press New game or Play."; otherwise sets the scrub slider's range and value and writes "Day d   tick t   alive a/n   frame i/N", adding "VICTOR: name" or "no victor (draw)" on the last frame of a finished game.
+Fills `loot_count`, `loot_weapon_name` and `map_coverage`; labels the play button "Pause" or "Play"; without a recording the headline says "No game yet. Press New game or Play."; otherwise sets the scrub slider's range and value and writes "Day d   tick t   alive a/n   frame i/N", adding "VICTOR: name" or "no victor (draw)" on the last frame of a finished game. When `session.feed_mode` is not `off` and `session.feed_label` is not empty, the label is put in front: "training feed: replaying a real generation 3 game   |   Day d ...".
 
 #### `Dashboard._build_inspector`, `Dashboard._refresh_inspector`
 
@@ -377,7 +470,20 @@ Fills `loot_count`, `loot_weapon_name` and `map_coverage`; labels the play butto
 
 `def _build_network(self) -> None`
 
-A hint, the caption `network_caption`, and the child window `network_holder` holding `visualizer.build(...)`.
+A hint, the caption `network_caption`, the evolution section, and the child window `network_holder` holding `visualizer.build(...)`.
+
+The evolution section is the collapsing header `evolution_header` "How the champion network changed over training", closed by default, with two plots:
+
+| Plot | Tag | Label | Axes | Series |
+| --- | --- | --- | --- | --- |
+| Change per step | `evo_plot` (height 150) | "Genome change per step (L2) and mean \|weight\|" | `evo_x` "step", `evo_y` "value" | lines `evo_change` "change from previous step", `evo_mean` "mean \|weight\|" |
+| Genome heat map | `evo_heat_plot` (height 170) | "Champion genome by step (rows = steps, columns = first 200 genes)" | `evo_heat_x` "gene", `evo_heat_y` "step" | `evo_heat_series`, created by `_refresh_evolution`; colormap `mvPlotColormap_RdBu` |
+
+#### `Dashboard._refresh_evolution`
+
+`def _refresh_evolution(self) -> None`
+
+Called from `_refresh_training` whenever a new step exists. Takes `session.network_evolution()` and returns if it is `None`. Sets `evo_change` to `(steps, change)` and `evo_mean` to `(steps, mean_abs)` and fits both axes. Then deletes `evo_heat_series` if it exists and adds a new `dpg.add_heat_series` under `evo_heat_y` from `data["genes"]` (steps by up to 200 genes, flattened row by row), with `scale_min = -limit` and `scale_max = limit` where `limit` is the largest absolute gene value (1.0 if every gene is zero), no cell labels (`format=""`), and bounds from `(0, 0)` to `(gene columns, steps)`. Fits the heat axes. Red and blue therefore mean positive and negative weights of equal size on either side of zero.
 
 #### `Dashboard._refresh_network`
 
@@ -420,7 +526,7 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 | Method | What it does |
 | --- | --- |
 | `_save_config` | `session.save_config(path)` |
-| `_load_config` | `session.load_config(path)`, then every `cfg_*` and `nn_*` widget is refreshed from the config, `_on_apply_neural()` runs, `apply_config_change("size")` regenerates the map, and the table is rebuilt |
+| `_load_config` | `session.load_config(path)`, then every `cfg_*` widget is refreshed from the config; `nn_layer_count` is set to the number of hidden layers and `_rebuild_width_fields` rebuilds the width fields; `nn_activation`, `nn_init`, `nn_scale` and `nn_sparsity` are refreshed; `_on_apply_neural()` runs; `apply_config_change("size")` regenerates the map; the table is rebuilt |
 | `_save_scenario` | `session.save_scenario(path)` |
 | `_load_scenario` | `session.load_scenario(path)`, rebuild the table, set `cfg_size` |
 | `_save_replay` | `session.save_replay(path)` |
@@ -439,22 +545,30 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 
 | Group | Tags |
 | --- | --- |
-| Window and panels | `root`, `status_text`, `left_panel`, `center_panel`, `right_panel`, `network_tab` |
+| Window and panels | `root`, `status_text`, `left_panel`, `center_panel`, `right_panel` |
+| Tab bars and tabs | `left_tabs`: `tab_tutorial`, `tab_setup`, `tab_map`, `tab_loot`, `tab_tributes`, `tab_brains`, `tab_play`, `tab_train`, `tab_research`; `right_tabs`: `tab_inspector`, `tab_network`, `tab_charts` |
 | Setup | `cfg_shape`, `cfg_layout`, `cfg_size`, `cfg_seed`, `cfg_chaos`, `cfg_days`, `cfg_tpd`, `cfg_players`, `cfg_thirst`, `cfg_hunger`, `cfg_health`, `cfg_vision`, `cfg_landmark`, `cfg_thirst_days`, `cfg_hunger_days`, `cfg_cannon`, `cfg_endgame`, `cfg_sponsors`, `cfg_gift`, `cfg_gm`, `cfg_quiet`, `cfg_close`, `cfg_water_podiums` |
 | Map and Loot | `map_preset`, `stamp_radius`, `map_coverage`, `loot_weapon_name`, `loot_count` |
 | Tributes | `podium_preset`, `roster_table`, `editor_header`, `ed_name`, `ed_district`, `ed_sex`, `ed_score`, `ed_survival`, `ed_brain`, `ed_weapon`, `ed_food`, `ed_medicine`, `ed_favor`, `ed_thirst`, `ed_hunger`, `ed_health` |
-| Brains | `cfg_brain`, `nn_layers`, `nn_activation`, `nn_init`, `nn_init_note`, `nn_scale`, `nn_sparsity`, `nn_summary` |
+| Brains | `cfg_brain`, `nn_layer_count`, `nn_widths_group`, `nn_width_0` ... `nn_width_5`, `nn_activation`, `nn_init`, `nn_init_note`, `nn_scale`, `nn_sparsity`, `nn_summary` |
 | Play | `auto_next_box`, `gif_step` |
-| Train | `ga_group`, `rl_group`, `train_start`, `train_progress`, `train_summary`, `perf_plot`, `perf_x`, `perf_y`, `perf_train`, `perf_val`, `perf_mean`, `stab_plot`, `stab_x`, `stab_y`, `stab_ploss`, `stab_vloss`, `stab_entropy`, `time_plot`, `time_x`, `time_y`, `time_bars`, `gene_plot`, `gene_x`, `gene_y`, `gene_same`, `gene_changed`, `run_name` |
+| Train | `ga_group`, `rl_group`, `train_start`, `train_progress`, `train_summary`, `feed_mode`, `perf_plot`, `perf_x`, `perf_y`, `perf_train`, `perf_val`, `perf_mean`, `stab_plot`, `stab_x`, `stab_y`, `stab_ploss`, `stab_vloss`, `stab_entropy`, `time_plot`, `time_x`, `time_y`, `time_bars`, `gene_plot`, `gene_x`, `gene_y`, `gene_same`, `gene_changed`, `run_name` |
 | Research | `sweep_param`, `sweep_values`, `sweep_games`, `sweep_workers`, `sweep_telemetry`, `sweep_progress`, `sweep_results`, `export_folder` |
 | Transport | `play_button`, `speed_slider`, `playhead`, `headline` |
 | Inspector | `insp_title`, `insp_facts`, `insp_thirst`, `insp_hunger`, `insp_health`, `insp_more`, `insp_log` |
-| Network and Charts | `network_caption`, `network_holder`, `chart_actions`, `chart_actions_x`, `chart_actions_y`, `chart_actions_bars`, `chart_instinct`, `chart_instinct_x`, `chart_instinct_y`, `chart_drink`, `chart_eat`, `chart_flee`, `chart_heat`, `chart_heat_x`, `chart_heat_y`, `chart_heat_series` |
+| Network | `network_caption`, `evolution_header`, `evo_plot`, `evo_x`, `evo_y`, `evo_change`, `evo_mean`, `evo_heat_plot`, `evo_heat_x`, `evo_heat_y`, `evo_heat_series`, `network_holder` |
+| Charts | `chart_actions`, `chart_actions_x`, `chart_actions_y`, `chart_actions_bars`, `chart_instinct`, `chart_instinct_x`, `chart_instinct_y`, `chart_drink`, `chart_eat`, `chart_flee`, `chart_heat`, `chart_heat_x`, `chart_heat_y`, `chart_heat_series` |
 | Other files | `arena_canvas`, `arena_texture_<n>` ([canvas.md](canvas.md)); `network_canvas` ([visualizer.md](visualizer.md)) |
 
 ## How to use it / experiment
 
 **Add a config slider.** Inside `_build_setup`, add `dpg.add_slider_float(label=..., default_value=c.<field>, min_value=..., max_value=..., callback=self._setter("<field>"), tag="cfg_<field>")`, and add the tag to the list in `_load_config` so loading a file refreshes it. Pass `react="size"` if the map must be regenerated.
+
+**Add a tutorial step.** Append `("10. My step", "What to do.", "mystep")` to `TUTORIAL_STEPS` and add an `elif name == "mystep":` branch to `_tutorial_action` that calls session methods and ends with `dpg.set_value("left_tabs", "tab_...")`. To take a picture of it, add a row to `SHOTS` in [screenshots.md](screenshots.md).
+
+**Switch tabs from code.** `dpg.set_value("left_tabs", "tab_train")` and `dpg.set_value("right_tabs", "tab_network")`. Reading `dpg.get_value("left_tabs")` gives the tag of the open tab.
+
+**Set an architecture from code.** `dpg.set_value("nn_layer_count", 2)` does not fire the callback, so call `self._rebuild_width_fields([32, 16])` and then `self._on_apply_neural()`, which is what `_load_config` does.
 
 **Add a mouse tool.** Append a name to `TOOLS`, then handle it in `_on_mouse_down` or `_on_mouse_click` with `self.canvas.mouse_cell()` and a session method.
 
@@ -462,12 +576,18 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 
 ## Gotchas
 
-- Painting, loot and dragging are ignored while a game is loaded (`session.game is not None`). Press Load replay or restart the dashboard to clear a game; a loaded replay sets `game` to `None`, so editing works again, but the map shown is the replay's.
+- Painting, loot and dragging are ignored while a game is loaded (`session.game is not None`). Press Load replay or restart the dashboard to clear a game; a loaded replay sets `game` to `None`, so editing works again, but the map shown is the replay's. The training feed in `replay` mode loads recordings the same way.
 - `cfg_size` and `cfg_players` apply on Enter, not on every keystroke.
+- The "nodes in hidden layer N" fields have no callbacks. Typing a width changes nothing until "Apply network settings" is pressed; the caption on the Network tab and any new game keep the old architecture until then.
+- Changing "number of hidden layers" rebuilds the width fields at once, but still through `_read_widths`, so widths already typed are kept. Shrinking drops layers from the end.
+- `_tutorial_action("train")` starts a fixed short evolution (`TrainingConfig(brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1)`) without touching `self.ga`, switches the Train tab to the genetic group and sets the feed to live; the Train tab widgets keep showing your own settings.
+- `_tutorial_action("train")` starts whichever method the Train tab radio shows. With `reinforce` selected it starts a reinforce run and ignores the voting settings it just made.
+- `_tutorial_action("network")` calls `_on_brain_all`, which drops every trained genome in the roster.
 - `_setter` writes the config field even while a game is playing; the running game keeps its own config copy, so changes apply to the next New game.
-- Load replay does not refresh the Setup widgets even though the session adopted the recording's config; Load config does.
+- Load replay does not refresh the Setup widgets even though the session adopted the recording's config; Load config does. The training feed's `replay` mode adopts a config the same way.
 - The Reward function sliders write `session.config.reward` directly, not a copy, and the sliders are not refreshed by Load config.
-- Training plots are updated only when the row count changes, so a slow generation shows a frozen plot with a moving progress bar.
+- Training plots, including the evolution plots on the Network tab, are updated only when the row count changes, so a slow generation shows a frozen plot with a moving progress bar. Because they update from `_refresh_training`, they fill in even while the Network tab is not open.
+- `evo_heat_series` is deleted and recreated on every new step, and the colour scale is recomputed from the largest absolute gene so far, so colours can shift between steps. Only the first 200 genes are drawn.
 - `_refresh_charts` runs every 30 frames and is skipped entirely until a game has produced telemetry.
 - The GIF export and To end run on the GUI thread and block the window until they finish.
 - `dpg.set_axis_ticks("gene_x", ...)` is only set for the voting brain's 8 genes; after a voting run followed by a neural run the names stay on the axis until the dashboard restarts.

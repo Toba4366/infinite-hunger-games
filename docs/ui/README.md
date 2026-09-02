@@ -1,6 +1,6 @@
 # Using the game makers' dashboard
 
-The dashboard is a desktop window for designing an arena, picking the tributes, watching a game play out tick by tick, training brains, and measuring what the tributes do. It is built with Dear PyGui. This page is for using it; the code is explained in [init.md](init.md), [main.md](main.md), [painter.md](painter.md), [session.md](session.md), [canvas.md](canvas.md), [visualizer.md](visualizer.md) and [app.md](app.md).
+The dashboard is a desktop window for designing an arena, picking the tributes, watching a game play out tick by tick, training brains and watching them train, and measuring what the tributes do. It is built with Dear PyGui. This page is the reference for every control. For a guided first run with pictures taken from the real dashboard, read the [illustrated walkthrough](../tutorial/README.md), which is the written version of the Tutorial tab. The code is explained in [init.md](init.md), [main.md](main.md), [painter.md](painter.md), [session.md](session.md), [canvas.md](canvas.md), [visualizer.md](visualizer.md), [app.md](app.md) and [screenshots.md](screenshots.md).
 
 ## Launching
 
@@ -10,13 +10,13 @@ From the project root (the folder that contains `hunger_games/`):
 python -m hunger_games ui
 ```
 
-`python -m hunger_games.ui` does the same thing. The window opens at 1500 by 920 pixels (it can be resized down to 1100 by 700) with a generated arena and a roster of 24 tributes on their podiums. A readable system font is used when one is found; the theme is dark with crimson buttons and gold sliders.
+`python -m hunger_games.ui` does the same thing. The window opens at 1500 by 920 pixels (it can be resized down to 1100 by 700) with a generated arena and a roster of 24 tributes on their podiums, on the Tutorial tab. A readable system font is used when one is found; the theme is dark with crimson buttons and gold sliders.
 
 ## The three panels
 
 | Panel | Where | What it holds |
 | --- | --- | --- |
-| Controls | Left | The four mouse tools and eight tabs: Setup, Map, Loot, Tributes, Brains, Play, Train, Research |
+| Controls | Left | The four mouse tools and nine tabs: Tutorial, Setup, Map, Loot, Tributes, Brains, Play, Train, Research |
 | Arena | Centre | The map, with the transport bar (play controls) underneath |
 | Analysis | Right | Three tabs: Inspector, Network, Charts |
 
@@ -40,6 +40,25 @@ Painting, placing loot and dragging only work while no game is loaded. After a g
 Female tributes are circles and male tributes are squares, filled with their district's colour and labelled `D4F`, `D4M` and so on (turn labels off on the Map tab). Weapons are red triangles, food a white dot, medicine a magenta plus. A yellow ring marks the selected tribute. While a game plays, a white parachute appears over anyone receiving a sponsor gift, a red X flashes where someone was just eliminated, and a red ring shows the game makers' safe circle when it is closing. While editing, only the stacks you placed by hand are drawn; the layout's own supplies appear once a game starts.
 
 ## Tab by tab
+
+### Tutorial
+
+The first tab is a walkthrough in ten folding steps, the same steps as the [illustrated walkthrough](../tutorial/README.md). The first two are open when the dashboard starts. Each step explains one part of the dashboard, and all but the first have a "Show me" button that performs the step for you with the same code the real controls use, then opens the tab where it lives.
+
+| Step | Show me does |
+| --- | --- |
+| Welcome | Nothing to press; explains the panels and the buttons |
+| 1. Build an arena | Loads the `lake_island` preset, moves tributes off the water, opens Map |
+| 2. Paint terrain | Selects the Paint terrain tool, opens Map. Drag on the arena yourself |
+| 3. Edit the tributes | Selects the first tribute, opens Tributes with the editor filled in |
+| 4. Place loot | Selects the Place loot tool, opens Loot. Click the arena yourself |
+| 5. Play a game | Selects the Select tool, starts a new game at 8 ticks per second, opens Play |
+| 6. Inspect and watch a network think | Sets the default brain to `neural`, gives it to every tribute (dropping any trained genomes), starts a game at 4 ticks per second, selects the first tribute, opens Brains on the left and Network on the right |
+| 7. Train and watch training | Sets the genetic settings to 24 voting brains for 5 generations with 1 game per genome and 1 validation game, sets the training feed to `live`, starts training, opens Train |
+| 8. Research | Opens Research |
+| 9. Save and share | Opens Play, where the replay and GIF buttons are; the other files are on Setup, Map and Train |
+
+Step 7 starts whichever method is picked on the Train tab. Leave it on `genetic` for the short voting-brain run the text describes. Its settings are written behind the widgets, which keep showing the old numbers until you change them.
 
 ### Setup
 
@@ -65,7 +84,7 @@ Four folding sections and the buttons under them. Changing shape, size, layout o
 | | quiet days before it, days to close | When it starts and how gently it closes |
 | | podiums may stand in water | Allow podiums in the sea, as in the 75th games |
 | Buttons | Regenerate arena, New roster | A fresh Perlin map; new names, scores, brains and podiums |
-| | Save config, Load config | The settings as JSON. Loading refreshes every widget and regenerates the map |
+| | Save config, Load config | The settings as JSON. Loading refreshes every widget, including the hidden-layer fields, and regenerates the map |
 
 ### Map
 
@@ -117,13 +136,14 @@ The table lists the roster; click a name to select. A `*` after the brain name m
 | --- | --- |
 | default brain | voting (the video's instinct-voting brain), random (a baseline) or neural (the network below, untrained until you train it). Used by New roster and Add tribute |
 | Give this brain to every tribute | Set everyone to that brain and drop any genomes |
-| hidden layers | Widths separated by commas: `16` for one layer, `32,16` for two |
+| number of hidden layers | 1 to 6. A hidden layer is a row of neurons between the 50 inputs and the 16 outputs. Changing the number adds or removes the fields below at once |
+| nodes in hidden layer 1, 2, ... | One field per layer, 1 to 512 nodes each. New layers start at 16; widths you typed are kept when you change the count |
 | activation | tanh, relu, leaky_relu, sigmoid or selu. tanh pairs with Xavier, relu with He, selu with LeCun |
 | initializer | How starting weights are drawn; the note under it explains each one |
 | init scale, sparsity | Used by the constant, uniform and normal initializers, and by sparse |
-| Apply network settings | Read the fields into the settings and show the shape and parameter count, e.g. `50 -> 16 -> 16, tanh, xavier_uniform, 1088 params` |
+| Apply network settings | Read the fields into the settings and show the shape and parameter count, e.g. `Network: 50 -> 16 -> 16, tanh, xavier_uniform, 1088 params` |
 
-The folding section "Inputs (50) and outputs (16)" lists the perception vector in order: the three bars, survival and training scores, weapon quality and reach, food and medkits carried, in water, hunt difficulty, downhill direction, direction and distance to water, grass and the centre, the loot here and nearby, the nearest threat's direction, distance, level and health, players in sight, the danger zone and hazard, the safe direction, day fraction, alive fraction, what the cannon and sky told them (field known, field strength, strongest remaining, my rank), and which terrain they stand on. The 16 outputs are rest, drink, eat, hunt, pick_up, heal, attack, flee and eight moves. The brain takes the highest score, or a softmax sample when chaos is above 0.
+The width fields change nothing until you press Apply network settings; the Network tab's caption shows the architecture in force. The folding section "Inputs (50) and outputs (16)" lists the perception vector in order: the three bars, survival and training scores, weapon quality and reach, food and medkits carried, in water, hunt difficulty, downhill direction, direction and distance to water, grass and the centre, the loot here and nearby, the nearest threat's direction, distance, level and health, players in sight, the danger zone and hazard, the safe direction, day fraction, alive fraction, what the cannon and sky told them (field known, field strength, strongest remaining, my rank), and which terrain they stand on. The 16 outputs are rest, drink, eat, hunt, pick_up, heal, attack, flee and eight moves. The brain takes the highest score, or a softmax sample when chaos is above 0.
 
 ### Play
 
@@ -143,6 +163,16 @@ Pick `genetic` or `reinforce` at the top; the settings below switch with it.
 **Reinforce** is policy gradient with a value baseline; it rewards every action and trains the neural brain only. Controls: epochs, games per epoch, learners per game (tributes driven by the learning policy; the rest use the default brain as opponents), learning rate, value learning rate, entropy bonus (keeps the policy varied), validation games, CPU workers, and the folding **Reward function**: per tick alive, win, death, kill, per health lost, per need restored (only while the bar was below half), placement (scaled by placing), and discount (how much a reward one tick later is worth).
 
 Start training runs in the background; the window stays usable. Stop after this step finishes the current generation or epoch. The progress bar counts games in the current step.
+
+**Training feed.** The radio button under the progress bar decides what the arena shows while training runs.
+
+| Feed | What the arena shows |
+| --- | --- |
+| `off` | Nothing; training only fills the plots (the default) |
+| `replay` | After every step, a recording of one real game from that step: the population playing itself on the painted map, exactly as the trainer saw it. Both trainers record that game by default |
+| `live` | After every step, a fresh game in which the newest champion drives the trainer's learner slots (genetic: a quarter of the roster, spread out; reinforce: the "learners per game" slots) while the other tributes keep their brains. Because it is a live game, the Network tab shows real activations |
+
+The next step is shown only when the arena is free: nothing is loaded, or the replay has reached its last frame, or the live game is over and you have watched to its end. Steps that finish while you are still watching are skipped, and the newest one is shown next. The headline under the arena starts with "training feed: replaying a real generation 3 game" or "training feed: epoch 3 champion playing live" while the feed is on. The feed plays at the current ticks per second, so pick Fast or Max if training is quicker than playback. `replay` replaces the roster and the settings with the training game's, so save your scenario first; `live` writes the champion into the learner slots of your roster.
 
 | Plot | What it shows |
 | --- | --- |
@@ -173,7 +203,7 @@ The last section answers the questions a reviewer asks: the method (genetic algo
 | ticks / second | Playback speed, 0.5 to 400 |
 | frame | Scrub anywhere in the recording |
 
-The headline shows the day, tick, how many are alive and the frame number, and on the last frame of a finished game the victor or "no victor (draw)". Every game is recorded as it plays, so you can scrub back, click a tribute to see their bars at that moment, then play on. Playing past the end of what has been simulated simulates more.
+The headline shows the day, tick, how many are alive and the frame number, and on the last frame of a finished game the victor or "no victor (draw)". While the training feed is on, the headline starts with what the feed is showing. Every game is recorded as it plays, so you can scrub back, click a tribute to see their bars at that moment, then play on. Playing past the end of what has been simulated simulates more.
 
 ## The right panel
 
@@ -181,7 +211,16 @@ The headline shows the day, tick, how many are alive and the frame number, and o
 
 **Network.** Select a neural tribute during a live game and its network is drawn as columns of nodes: the 50 named inputs on the left, the hidden layers, and the 16 named outputs with their probabilities on the right. Red nodes are positive activations, blue nodes negative, dark grey idle. Warm edges are positive weights, cool edges negative, and brighter means larger; only the six strongest edges into each node are drawn. The yellow output label is the action taken. Without a live neural tribute the tab shows the bare architecture from the Brains tab. The picture is redrawn every frame, so use Slow-mo or Step to follow one decision at a time.
 
-**Charts.** Three live charts of every game watched this session, refreshed every 30 frames: the action distribution in percent; the instinct curves (how often the tribute drank, ate or fled at each level of the matching bar, which is how chapter 4's voting rules were tuned); and a heatmap of where tributes spend their time.
+Above the drawing, the folding section "How the champion network changed over training" holds two plots that grow with every training step, whether or not the tab is open:
+
+| Plot | What it shows |
+| --- | --- |
+| Genome change per step (L2) and mean \|weight\| | Two lines by step: how far the champion genome moved from the previous step (the length of the difference vector; 0 at step 0), and the mean absolute value of its genes. A change line that settles toward 0 means the champion has stopped moving; a mean that keeps growing means the weights are getting larger |
+| Champion genome by step | A heat map: one row per step, one column per gene (the first 200), red for positive and blue for negative on a scale that is symmetric about zero. Vertical streaks are genes that stayed put; a row that differs from the one above is a step that changed the champion |
+
+For genetic training the rows are each generation's best genome; for reinforce they are the policy after each epoch.
+
+**Charts.** Three live charts of every game watched this session, refreshed every 30 frames: the action distribution in percent; the instinct curves (how often the tribute drank, ate or fled at each level of the matching bar, which is how chapter 4's voting rules were tuned); and a heatmap of where tributes spend their time. Games shown by the `replay` feed are not counted; games from the `live` feed are, once they finish.
 
 ## Recipes
 
@@ -205,14 +244,22 @@ Setup tab: Random above 0.5 starts everyone somewhere between half and full; dra
 
 ### Two hidden layers with He and relu, GA training, watch the champion, save the run
 
-1. Brains tab: hidden layers `32,16`, activation `relu`, initializer `he_normal`, Apply network settings. The summary reads `50 -> 32 -> 16 -> 16, relu, he_normal, 2432 params`.
+1. Brains tab: number of hidden layers 2, nodes in hidden layer 1 `32`, nodes in hidden layer 2 `16`, activation `relu`, initializer `he_normal`, Apply network settings. The summary reads `Network: 50 -> 32 -> 16 -> 16, relu, he_normal, 2432 params`.
 2. Train tab: `genetic`, brain to evolve `neural`, generations 20, CPU workers 4, Start training. The progress bar counts games; the Performance plot grows one point per generation and the gene bars turn gold where the champion changed.
 3. When it finishes (or after Stop after this step), press Watch champion. Click a tribute and open the Network tab to watch its hidden layers.
 4. Type a name in the field next to Save run folder and press it; the status line names the folder under `results/`. Save champion keeps just the genome.
 
+### Watch training as it happens
+
+1. Map tab: Save scenario first if you edited the roster, because the replay feed replaces it.
+2. Train tab: `genetic`, brain to evolve `voting`, population 24, generations 10, games per genome 1. Training feed `replay`. Play tab: Fast 40/s. Start training.
+3. As soon as generation 0 finishes, the arena replays one of its real games and the headline reads "training feed: replaying a real generation 0 game". When it reaches its last frame the newest finished generation replaces it.
+4. Switch the feed to `live`. When the current replay ends, the newest champion is written into a quarter of the roster's slots and a fresh game starts. Click one of those tributes (the roster marks them with `*`) and open the Network tab. With a neural brain to evolve, the node graph now shows the champion thinking.
+5. Open "How the champion network changed over training" on the Network tab to see how far each generation moved the champion and which genes changed.
+
 ### Train with reinforce and read the curves
 
-1. Brains tab: default brain `voting` (the opponents), a small network such as `16`.
+1. Brains tab: default brain `voting` (the opponents), a small network such as one hidden layer of 16 nodes.
 2. Train tab: `reinforce`, epochs 30, games per epoch 4, learners per game 6, CPU workers 4. Open Reward function if you want a different objective (for example a bigger kill reward and a smaller death penalty for aggressive tributes). Start training.
 3. Performance: training return should rise; validation return (greedy policy on fixed seeds) is the honest number. Stability: policy loss is noisy by nature, value loss should fall, entropy should fall slowly and not hit zero. If it collapses, raise the entropy bonus. Watch champion loads the best-validated policy.
 
@@ -245,6 +292,7 @@ Setup tab: Random above 0.5 starts everyone somewhere between half and full; dra
 | `results/<name>_<timestamp>/` | Train | `config.json`, `history.json`, `champion.json`, `plots/` |
 | `results/<parameter>_<timestamp>/` | Research | `config.json`, `results.csv`, `summary.json`, `plots/`, plus one `batches/<value>/` folder per value |
 | `output/watched/*.png` | Research | The twelve behaviour charts of the games watched this session |
+| `docs/tutorial/images/*.png` | none | The tutorial's pictures, written by `python -m hunger_games.ui.screenshots` (see [screenshots.md](screenshots.md)) |
 
 Default names are offered by the file dialogs; the extension is added if you leave it off.
 
@@ -256,5 +304,9 @@ Default names are offered by the file dialogs; the extension is added if you lea
 - Replay files are Python pickles. Only open `.replay` files you made yourself, because loading a pickle can run code.
 - Training and sweeps with more than one CPU worker use separate processes. This works from the dashboard on macOS, Windows and Linux; the dashboard's entry point is guarded so the workers do not open extra windows.
 - Trainers and sweeps use the painted map but not the hand-placed loot or the edited roster.
-- Load replay does not refresh the Setup widgets, although the session adopts the replay's settings. Load config does refresh them.
+- Load replay and the `replay` training feed do not refresh the Setup widgets, although the session adopts the recording's settings. Load config does refresh them.
+- The `replay` feed replaces the roster with the training game's tributes and the `live` feed writes the champion into some of yours. Save a scenario before turning the feed on if you want your roster back.
+- The training feed remembers how many steps it has shown and does not reset when you start a second run. If the first run had 20 steps, the second run's feed stays quiet until its 21st. Restart the dashboard between runs to watch from the start.
+- The hidden-layer width fields do nothing until Apply network settings is pressed.
+- The Tutorial tab's step 7 writes its settings behind the Train tab's genetic widgets, which keep showing the old numbers until you change them, and it starts whichever method the Train tab has selected.
 - Editing a `.py` file while the dashboard is open changes nothing on screen. Restart the dashboard to pick up source changes.

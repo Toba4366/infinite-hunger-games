@@ -120,12 +120,16 @@ def capture_tutorial_images(folder: str | Path, width: int = 1440, height: int =
             for step in range(12):
                 dashboard.session.paint(painter.width // 4 + step * 2, painter.height // 3 + step, TerrainType.ROCK, 3)
             dashboard.session.finish_painting()
-            dashboard.canvas.brush_preview = (painter.width // 4 + 24, painter.height // 3 + 12, 3)
-        # Training: wait for a couple of generations so the plots have points.
+            dashboard.brush_demo = (painter.width // 4 + 24, painter.height // 3 + 12, 3)
+        # Training: finish the game on screen so the feed can show a champion game, and wait for a few steps.
         if action == "train":
+            dashboard.brush_demo = None
+            dashboard.session.run_to_end()
             while dashboard.session.training_running and len(dashboard.session.training_history()) < 3:
                 frames(1)
                 time.sleep(0.01)
+            # Let the feed pick up the newest champion.
+            frames(5)
         # Show the right tabs.
         dpg.set_value("left_tabs", left_tab)
         dpg.set_value("right_tabs", right_tab)

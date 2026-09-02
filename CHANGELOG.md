@@ -35,6 +35,16 @@ repository.
 - `load_replay` now goes through `load_recording`, so replays from any
   source rebuild the roster and config the same way.
 
+### Fixed
+- The training feed counter is reset when a new training run starts, so a
+  second run's feed shows its steps at once.
+- The tutorial's train step no longer edits the Train tab's settings behind
+  the widgets; it starts a fixed short evolution and shows the genetic group.
+- The brush ring can be placed by the screenshot tool even when the mouse is
+  elsewhere, so the paint picture shows the brush.
+- `pyobjc-framework-Quartz` is listed as a macOS requirement (window-only
+  screenshots need it).
+
 ## 0.3.0 - 2026-09-02 (research release)
 
 Requested: a dashboard that supports research, not just play; graphs that

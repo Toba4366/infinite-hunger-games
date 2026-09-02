@@ -1,14 +1,14 @@
 # `reinforce.py`
 
 **Source:** [hunger_games/training/reinforce.py](../../hunger_games/training/reinforce.py)
-**Depends on:** `json`, `time`, `collections.abc.Callable`, `concurrent.futures.ProcessPoolExecutor`, `dataclasses`, `pathlib` (standard library); `numpy`; [brain/__init__.py](../brain/init.md) (`Brain`, `create_brain`); [brain/mlp.py](../../hunger_games/brain/mlp.py) (`MLP`, `Adam`); [brain/neural.py](../brain/neural.md) (`NeuralBrain`, `softmax`); [hunger_games/config.py](../config.md) (`SimulationConfig`, and through it `RewardConfig`); [hunger_games/game.py](../game.md) (`Game`); [hunger_games/perception.py](../perception.md) (`VECTOR_SIZE`); [hunger_games/player.py](../player.md) (`Player`); [hunger_games/research/telemetry.py](../../hunger_games/research/telemetry.py) (`BehaviorTelemetry`); [hunger_games/scenario.py](../scenario.md) (`Scenario`)
-**Used by:** [training/__init__.py](init.md) (re-exports `EpochStats`, `ReinforceTrainer`, `RLConfig`); [training/runs.py](runs.md) (`save_run` reads `trainer.rl`, `history`, `history_rows()`, `save_policy`); [hunger_games/ui/session.py](../ui/session.md) (`ReinforceTrainer`, `RLConfig`, `save_policy`); [hunger_games/ui/app.py](../ui/app.md) (`RLConfig`); [experiments/run_rl.py](../experiments/run_rl.md); `tests/test_research.py`
+**Depends on:** `json`, `time`, `collections.abc.Callable`, `concurrent.futures.ProcessPoolExecutor`, `dataclasses`, `pathlib` (standard library); `numpy`; [brain/__init__.py](../brain/init.md) (`Brain`, `create_brain`); [brain/mlp.py](../../hunger_games/brain/mlp.py) (`MLP`, `Adam`); [brain/neural.py](../brain/neural.md) (`NeuralBrain`, `softmax`); [hunger_games/config.py](../config.md) (`SimulationConfig`, and through it `RewardConfig`); [hunger_games/game.py](../game.md) (`Game`); [hunger_games/perception.py](../perception.md) (`VECTOR_SIZE`); [hunger_games/player.py](../player.md) (`Player`); [hunger_games/recorder.py](../recorder.md) (`Recorder`, `Recording`); [hunger_games/research/telemetry.py](../../hunger_games/research/telemetry.py) (`BehaviorTelemetry`); [hunger_games/scenario.py](../scenario.md) (`Scenario`)
+**Used by:** [training/__init__.py](init.md) (re-exports `EpochStats`, `ReinforceTrainer`, `RLConfig`); [training/runs.py](runs.md) (`save_run` reads `trainer.rl`, `history`, `history_rows()`, `save_policy`); [hunger_games/ui/session.py](../ui/session.md) (`ReinforceTrainer`, `RLConfig`, `save_policy`, and `history[-1].showcase` for the training feed); [hunger_games/ui/app.py](../ui/app.md) (`RLConfig`); [experiments/run_rl.py](../experiments/run_rl.md); `tests/test_research.py`; `tests/test_feed.py`
 
 ## Purpose
 
 This file trains the neural brain by reinforcement learning. The genetic algorithm in [genetic.md](genetic.md) scores whole games. This trainer scores every action: after each tick a learning tribute gets a reward built from the weights in `RewardConfig`, and the policy network is nudged to make well-rewarded actions more likely. A second network, the value network, predicts how much reward is still to come from a state. Subtracting that prediction (the "baseline") makes the learning signal far less noisy. This is REINFORCE with a learned baseline, the simplest actor-critic method, written in plain numpy on top of the `MLP` class.
 
-Everything a researcher asks for is logged per epoch: policy loss, value loss, policy entropy, training return, validation return on held-out seeds, survival time, win and kill rates, wall-clock time, and the behaviour telemetry from `research/telemetry.py`.
+Everything a researcher asks for is logged per epoch: policy loss, value loss, policy entropy, training return, validation return on held-out seeds, survival time, win and kill rates, wall-clock time, and the behaviour telemetry from `research/telemetry.py`. With `record_showcase` on, each epoch also keeps a tick-by-tick `Recording` of its first training game, so the dashboard's training feed can replay what the learners actually did.
 
 ## Concepts you need
 
@@ -25,6 +25,8 @@ Everything a researcher asks for is logged per epoch: policy loss, value loss, p
 **Greedy versus sampling.** During training the learner samples from the softmax at temperature 1 (`chaos=1.0`). During validation it takes the argmax (`chaos=0.0`). See `NeuralBrain.probabilities` in [../brain/neural.md](../brain/neural.md).
 
 **Hooks.** `Game.decision_hooks` are called right after a brain decides and before the action is carried out; `Game.tick_hooks` are called at the end of each tick after `tick` has advanced. The reward is computed in a tick hook and attached to the most recent decision.
+
+**Recordings.** A `Recorder` wraps a `Game`, captures frame 0 on construction, and `record_all()` steps the game to the end while capturing after every tick. The hooks above still fire during a recorded game, because `Recorder.step` calls `game.step()`. See [../recorder.md](../recorder.md).
 
 ## Walkthrough
 
@@ -49,6 +51,7 @@ class RLConfig:
 | `max_grad_norm` | `5.0` | Gradients with a larger combined length are scaled down |
 | `workers` | `1` | CPU cores for collecting episodes |
 | `seed` | `None` | The trainer's own seed |
+| `record_showcase` | `True` | Whether to record the first training game of every epoch for the dashboard's training feed |
 
 The reward weights and the discount are not here. They live in `SimulationConfig.reward` (a `RewardConfig`, see [../config.md](../config.md)) because the reward is a property of the game, not of the learner.
 
@@ -76,6 +79,7 @@ class EpochStats:
 | `cumulative_seconds` | Seconds since training started |
 | `genome` | The policy genome after this epoch's update (a copy, `repr=False`) |
 | `telemetry` | Merged telemetry of this epoch's training episodes (`repr=False`) |
+| `showcase` | A `Recording` of this epoch's first training game, or `None` when `record_showcase` is off (`repr=False`) |
 
 #### `to_row()`
 
@@ -83,12 +87,12 @@ class EpochStats:
 def to_row(self) -> dict:
 ```
 
-Every field except `genome` and `telemetry`, for `history.json` and the plots.
+Every field except `genome`, `telemetry` and `showcase`, for `history.json` and the plots. It walks `self.__dict__` and skips those three keys. The recording holds one frame per tick and is not JSON, so it never reaches a run folder.
 
 ### `play_rl_episode(...)`
 
 ```python
-def play_rl_episode(config: SimulationConfig, scenario: Scenario | None, genome: np.ndarray, learner_ids: list[int], seed: int, greedy: bool) -> dict:
+def play_rl_episode(config: SimulationConfig, scenario: Scenario | None, genome: np.ndarray, learner_ids: list[int], seed: int, greedy: bool, record: bool = False) -> dict:
 ```
 
 Plays one game with the policy driving `learner_ids` and returns their experience. A top-level function so worker processes can run it.
@@ -112,13 +116,15 @@ Then `previous[pid]` is updated and `r` is added to `rewards[pid][-1]`, the late
 
 The hooks are appended after the telemetry's, so death bookkeeping is done before the reward is computed.
 
-**End of game.** After `game.run()`, with `n = len(game.players)`:
+**Play.** `recording = Recorder(game).record_all() if record else None`. When `record` is on, the recorder plays the whole game and captures every tick; the hooks fire as normal. Then `game.run()` is called either way. If the recorder already played the game to the end, `run()` loops zero times, runs the end-of-game bookkeeping (which is safe to repeat), and returns. If nothing was recorded, `run()` is what plays the game.
+
+**End of game.** With `n = len(game.players)`:
 
 - `bonus = placement * (n - (player.placement or n)) / max(1, n - 1)`. First place earns the full `placement` weight (`2.0`), last earns nothing. Survivors of a draw share a placement equal to how many survived.
 - If the learner is alive and is the only one alive, `bonus += win` (`5.0`).
 - The bonus is added to the last decision's reward.
 
-**Return value.** A dict with `vectors`, `indices` and `rewards` (each `{pid: np.ndarray}`), `outcomes` (`{pid: {"return", "survival", "won", "kills"}}` where `survival` is `death_ticks.get(pid, game.tick)`), and `telemetry` (the summary).
+**Return value.** A dict with `vectors`, `indices` and `rewards` (each `{pid: np.ndarray}`), `outcomes` (`{pid: {"return", "survival", "won", "kills"}}` where `survival` is `death_ticks.get(pid, game.tick)`), `telemetry` (the summary), and `recording` (the `Recording`, or `None`).
 
 ### `_run_episode_job(args)`
 
@@ -148,15 +154,15 @@ Seeds `self.rng` from `rl.seed`. The policy is `NeuralBrain(chaos=1.0, config=co
 def _learner_ids(self) -> list[int]:
 ```
 
-`count = min(learners_per_game, num_players)` slots at `int(i * num_players / count)`. With 6 of 24 that is `[0, 4, 8, 12, 16, 20]`, evenly spaced so learners are not all neighbours on the podiums.
+`count = min(learners_per_game, num_players)` slots at `int(i * num_players / count)`. With 6 of 24 that is `[0, 4, 8, 12, 16, 20]`, evenly spaced so learners are not all neighbours on the podiums. The dashboard's "live" feed mode gives the champion to these same slots.
 
-#### `_collect(seeds, greedy, on_progress=None)`
+#### `_collect(seeds, greedy, on_progress=None, record_first=False)`
 
 ```python
-def _collect(self, seeds: list[int], greedy: bool, on_progress: Callable[[int, int], None] | None = None) -> list[dict]:
+def _collect(self, seeds: list[int], greedy: bool, on_progress: Callable[[int, int], None] | None = None, record_first: bool = False) -> list[dict]:
 ```
 
-Reads the policy genome once, builds one job `(config, scenario, genome, learners, seed, greedy)` per seed, and runs them through a pool when `workers > 1` and there is more than one job, else in sequence. Calls `on_progress(done, total)` after each. Returns the list of episode dicts.
+Reads the policy genome once, builds one job `(config, scenario, genome, learners, seed, greedy, record)` per seed, where `record` is `record_first and index == 0`, and runs them through a pool when `workers > 1` and there is more than one job, else in sequence. Calls `on_progress(done, total)` after each. Returns the list of episode dicts, in seed order. At most the first episode carries a recording.
 
 #### `_returns(rewards)`
 
@@ -211,13 +217,15 @@ def step_epoch(self, on_progress: Callable[[int, int], None] | None = None) -> E
 ```
 
 1. Start the clocks.
-2. Draw `episodes_per_epoch` random seeds from `self.rng` and `_collect` them with `greedy=False`.
+2. Draw `episodes_per_epoch` random seeds from `self.rng` and `_collect` them with `greedy=False` and `record_first=self.rl.record_showcase`. So the first training game of the epoch is recorded when the switch is on.
 3. `_update(episodes)`.
 4. Training means from `_outcome_means`.
-5. Validation: seeds `validation_seed + i` for `i < validation_games`, collected with `greedy=True` and the *updated* policy. The validation kill rate is discarded.
+5. Validation: seeds `validation_seed + i` for `i < validation_games`, collected with `greedy=True` and the *updated* policy. Validation games are never recorded. The validation kill rate is discarded.
 6. If `val_return > best_val_return` or no best yet, store a copy of the current policy genome as `best_genome`.
 7. Merge the training episodes' telemetry.
-8. Build `EpochStats` (with a copy of the current genome), append, increment `epoch`.
+8. Build `EpochStats` (with a copy of the current genome, and `showcase=episodes[0].get("recording")`, or `None` if there were no episodes), append, increment `epoch`.
+
+The showcase is the game played by the policy *before* this epoch's update, while `genome` is the policy *after* it. They are one gradient step apart.
 
 #### `run(on_epoch=None, on_progress=None)`
 
@@ -279,7 +287,7 @@ Writes JSON in the same shape as a GA champion file, plus extras:
 def history_rows(self) -> list[dict]:
 ```
 
-`[stats.to_row() for stats in self.history]`.
+`[stats.to_row() for stats in self.history]`. No genomes, telemetry or recordings.
 
 ## How to use it / experiment
 
@@ -294,6 +302,17 @@ trainer = ReinforceTrainer(config, RLConfig(epochs=10, episodes_per_epoch=4, see
 trainer.run(on_epoch=lambda e: print(e.epoch, round(e.val_return, 2), round(e.entropy, 2)))
 trainer.save_policy("policy.json")
 ```
+
+**Watch an epoch.** Each `EpochStats.showcase` is a full recording of that epoch's first training game, with the learners in the `_learner_ids()` slots. Save it or turn it into a GIF:
+
+```python
+from hunger_games.renderer import export_recording_gif
+
+trainer.history[0].showcase.save("epoch_0.replay")
+export_recording_gif(trainer.history[-1].showcase, "epoch_last.gif")
+```
+
+In the dashboard, set the training feed to "replay" and each epoch's game is loaded as soon as the arena is free. See [../ui/session.md](../ui/session.md).
 
 **What each logged metric means, and the trend you want.**
 
@@ -320,10 +339,12 @@ trainer.save_policy("policy.json")
 ## Gotchas
 
 - **`validation_games=0` freezes the champion.** `val_return` is then always `0.0`, so the "better than best" test succeeds only on epoch 0 and `champion` stays the epoch-0 policy. Use `history[-1].genome` for the latest policy in that case.
+- **Showcases stay in memory.** Every epoch's recording lives in `history` until the trainer is dropped. For long runs on big maps, set `record_showcase=False`. The recordings never reach `history.json` or the run folder either way.
+- The showcase is the epoch's *first* training game, played by the sampling policy (chaos 1) before the update. It is not a greedy game and it is not the champion. To watch the champion, use `champion_brain()` in a scenario or the dashboard's "live" feed mode.
 - Advantages are normalised per batch, so `policy_loss` cannot be compared across epochs and does not go to zero as the policy improves.
 - The value network sees returns on the raw reward scale while advantages are normalised. `value_loss` therefore scales with the reward weights; doubling every weight roughly quadruples it.
 - Rewards are attached to the *latest decision*, and every tick adds to it, so a learner's last decision before dying carries the death penalty, the placement bonus, and possibly a win bonus. Long spans without a decision do not happen, because every living tribute decides every tick.
-- The same `spawn` rules as the genetic trainer apply when `workers > 1`: a `__main__` guard, a script file, and pickle-able `config` and `scenario`. See [genetic.md](genetic.md).
+- The same `spawn` rules as the genetic trainer apply when `workers > 1`: a `__main__` guard, a script file, and pickle-able `config` and `scenario`. See [genetic.md](genetic.md). The first episode's `Recording` is pickled back from its worker as well.
 - `play_rl_episode` builds learners with `NeuralBrain(...)` directly, not `create_brain`, so `config.endgame_instinct` does not apply to learners. It does apply to the opponents.
 - Learners always use `config.neural` for their architecture. A policy saved with `hidden_layers=(32,)` will not load into a `ReinforceTrainer` built with the default `(16,)`.
 - `greedy=True` validation uses chaos 0 and picks the argmax. A policy that looks fine when sampling can score badly greedily if its argmax action is a poor default (for example "attack" with no weapon). Compare `train_return` and `val_return`.

@@ -3,4 +3,5 @@ matplotlib>=3.7
 pandas>=1.5
 pillow>=9
 dearpygui>=1.11
+pyobjc-framework-Quartz>=9; sys_platform == "darwin"
 pytest>=7

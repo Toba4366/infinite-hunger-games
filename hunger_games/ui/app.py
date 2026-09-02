@@ -143,6 +143,8 @@ class Dashboard:
         self.rl = RLConfig()
         # Which method the Train tab uses.
         self.method = "genetic"
+        # A brush ring to draw when the mouse is not over the arena (used by the screenshot tool).
+        self.brush_demo: tuple[int, int, int] | None = None
 
     # ================================================================ run
 
@@ -354,9 +356,9 @@ class Dashboard:
         ):
             self.session.new_game()
             self.session.playing = True
-        # Brush preview.
+        # Brush preview: the ring follows the mouse, or sits where the screenshot tool put it.
         cell = self.canvas.mouse_cell() if self.tool == "Paint terrain" else None
-        self.canvas.brush_preview = (cell[0], cell[1], self.brush_radius) if cell is not None else None
+        self.canvas.brush_preview = (cell[0], cell[1], self.brush_radius) if cell is not None else self.brush_demo
         # Draw.
         self.canvas.render()
         # Panels.
@@ -494,12 +496,17 @@ class Dashboard:
             dpg.set_value("left_tabs", "tab_brains")
         # Train.
         elif name == "train":
-            self.ga = TrainingConfig(
-                brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1
-            )
+            # A short, fixed evolution of voting brains; the Train tab's own settings are left alone.
+            self._on_method(None, "genetic")
             self.session.feed_mode = "live"
             dpg.set_value("feed_mode", "live")
-            self._on_start_training()
+            self._plotted_steps = -1
+            self.session.start_training(
+                TrainingConfig(
+                    brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1
+                ),
+                "genetic",
+            )
             dpg.set_value("left_tabs", "tab_train")
         # Research.
         elif name == "research":

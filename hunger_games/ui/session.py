@@ -779,6 +779,9 @@ class Session:
         scenario = Scenario(terrain=self.painter.terrain.tolist())
         # The trainer.
         self.training_method = method
+        # A new run: the feed starts from its first step.
+        self._feed_steps_seen = 0
+        self.feed_label = ""
         # Build.
         if method == "genetic":
             self.trainer = GeneticTrainer(config, settings, scenario=scenario)

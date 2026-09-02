@@ -1,8 +1,8 @@
 # `genetic.py`
 
 **Source:** [hunger_games/training/genetic.py](../../hunger_games/training/genetic.py)
-**Depends on:** `json`, `time`, `collections.abc.Callable`, `concurrent.futures.ProcessPoolExecutor`, `dataclasses`, `pathlib` (standard library); `numpy`; [brain/__init__.py](../brain/init.md) (`Brain`, `create_brain`); [hunger_games/config.py](../config.md) (`NeuralConfig`, `SimulationConfig`); [hunger_games/game.py](../game.md) (`Game`); [hunger_games/research/telemetry.py](../../hunger_games/research/telemetry.py) (`BehaviorTelemetry`); [hunger_games/scenario.py](../scenario.md) (`Scenario`)
-**Used by:** [training/__init__.py](init.md) (re-exports `GenerationStats`, `GeneticTrainer`, `TrainingConfig`); [training/runs.py](runs.md) (`save_run` reads `trainer.training`, `history`, `history_rows()`, `champion`, `save_champion`); [hunger_games/ui/session.py](../ui/session.md) (`GeneticTrainer`, `TrainingConfig`, `previous_champion`, `load_champion`); [hunger_games/ui/app.py](../ui/app.md) (`TrainingConfig`); [experiments/run_ga.py](../experiments/run_ga.md); `tests/test_recorder_training.py`; `tests/test_research.py`; `tests/test_ui_session.py`
+**Depends on:** `json`, `time`, `collections.abc.Callable`, `concurrent.futures.ProcessPoolExecutor`, `dataclasses`, `pathlib` (standard library); `numpy`; [brain/__init__.py](../brain/init.md) (`Brain`, `create_brain`); [hunger_games/config.py](../config.md) (`NeuralConfig`, `SimulationConfig`); [hunger_games/game.py](../game.md) (`Game`); [hunger_games/recorder.py](../recorder.md) (`Recorder`, `Recording`); [hunger_games/research/telemetry.py](../../hunger_games/research/telemetry.py) (`BehaviorTelemetry`); [hunger_games/scenario.py](../scenario.md) (`Scenario`)
+**Used by:** [training/__init__.py](init.md) (re-exports `GenerationStats`, `GeneticTrainer`, `TrainingConfig`); [training/runs.py](runs.md) (`save_run` reads `trainer.training`, `history`, `history_rows()`, `champion`, `save_champion`); [hunger_games/ui/session.py](../ui/session.md) (`GeneticTrainer`, `TrainingConfig`, `previous_champion`, `load_champion`, and `history[-1].showcase` for the training feed); [hunger_games/ui/app.py](../ui/app.md) (`TrainingConfig`); [experiments/run_ga.py](../experiments/run_ga.md); `tests/test_recorder_training.py`; `tests/test_research.py`; `tests/test_ui_session.py`; `tests/test_feed.py`
 
 ## Purpose
 
@@ -10,11 +10,12 @@ This file is a genetic algorithm that evolves brains by playing games. The idea,
 
 Nothing here knows what a genome means. It works for the voting brain's eight genes and for a neural network's 1088 weights alike, because it only ever calls `genome()` and `set_genome()`.
 
-Three things were added since the first version of this trainer, and a researcher will care about all of them:
+Four things were added since the first version of this trainer, and a researcher will care about all of them:
 
 - **Validation.** Each generation's champion also plays a few games on *fixed* seeds against the config's default brain. That gives a yardstick that does not move as the population changes.
 - **Telemetry.** The evaluation games can record behaviour (which actions, at what thirst, where on the map) through `BehaviorTelemetry`, so the charts in a run folder show *how* play changed, not just the score.
 - **Timing and rows.** Every generation records its own seconds and the cumulative seconds, and `to_row()` / `history_rows()` give JSON-friendly rows for `history.json` and the plots.
+- **Showcase recordings.** With `record_showcase` on, the first evaluation game of every generation is recorded tick by tick with a `Recorder`. The `Recording` is stored on `GenerationStats.showcase`, and the dashboard's training feed replays it so you can watch the population play for real while training runs.
 
 ## Concepts you need
 
@@ -25,6 +26,8 @@ Three things were added since the first version of this trainer, and a researche
 **Coevolution.** Genomes are scored by playing *against each other*. That means fitness is relative: a genome that scored 0.8 in generation 3 faced a different, weaker crowd than one scoring 0.8 in generation 30. Only `val_fitness`, measured against a fixed opponent on fixed seeds, is comparable across generations.
 
 **Elitism, tournament selection, crossover, mutation.** The four moving parts of a GA. Elites are copied unchanged so the best is never lost. A tournament picks a parent by drawing a few random genomes and keeping the fittest. Crossover mixes two parents gene by gene. Mutation adds Gaussian noise to a fraction of genes.
+
+**Recordings.** A `Recorder` wraps a `Game`, steps it, and copies the state after every tick into a `Frame`. `Recorder(game).record_all()` plays the game to the end and returns the finished `Recording`, with `result` filled in. See [../recorder.md](../recorder.md). A recording holds one frame per tick, so it is much bigger than a fitness number; that is why only one game per generation is recorded and why it is left out of `to_row()`.
 
 **Process pools.** With `workers > 1`, games run in separate Python processes via `ProcessPoolExecutor`. Every argument and result is pickled and sent across. On macOS (and Windows) new processes are started with the `spawn` method, which re-imports your main script. That is why the job functions here are top-level functions and why scripts need a `__main__` guard (see Gotchas).
 
@@ -57,6 +60,7 @@ Every knob of the algorithm. A plain dataclass, so `TrainingConfig(generations=5
 | `validation_games` | `2` | Games the champion plays per generation against the config's brain on fixed seeds |
 | `validation_seed` | `90000` | The first validation seed (game `i` uses `validation_seed + i`) |
 | `collect_telemetry` | `True` | Whether evaluation games record behaviour (slower, but gives the behaviour charts) |
+| `record_showcase` | `True` | Whether to record one real evaluation game per generation so the dashboard can replay training |
 
 Design reasoning: the defaults make 4 games per generation with 24 players (48 genomes, 2 rounds), which is the smallest run that gives each genome two independent placements.
 
@@ -80,6 +84,7 @@ What happened in one generation. Built by `step_generation` and kept in `trainer
 | `val_fitness` | `float` (default `0.0`) | Mean fitness of this generation's champion in the validation games |
 | `cumulative_seconds` | `float` (default `0.0`) | Seconds since training started |
 | `telemetry` | `dict` (default `{}`, `repr=False`) | Merged `BehaviorTelemetry.summary()` of this generation's evaluation games |
+| `showcase` | `Recording | None` (default `None`, `repr=False`) | A recording of one real evaluation game from this generation, or `None` when `record_showcase` is off |
 
 #### `to_row()`
 
@@ -87,7 +92,7 @@ What happened in one generation. Built by `step_generation` and kept in `trainer
 def to_row(self) -> dict:
 ```
 
-Returns every field except `champion` and `telemetry` as a plain dictionary. Those two are large (a genome is 1088 floats; a telemetry summary holds heatmaps), so they are left out of `history.json` and the dashboard's table. `save_run` collects the telemetry separately.
+Returns every field except `champion`, `telemetry` and `showcase` as a plain dictionary. It walks `self.__dict__` and skips those three keys, so a field added to the dataclass later shows up in rows automatically. The three are left out because they are large (a genome is 1088 floats, a telemetry summary holds heatmaps, a recording holds one frame per tick) and none of them is JSON. `history.json` and the dashboard's table use these rows. `save_run` collects the telemetry separately; the showcase stays in memory only.
 
 ### `fitness_of(...)`
 
@@ -104,7 +109,7 @@ Design reasoning: placement dominates, so the GA optimises survival to the end. 
 ### `play_evaluation_game(...)`
 
 ```python
-def play_evaluation_game(config: SimulationConfig, scenario: Scenario | None, brain_name: str, genomes: list[np.ndarray], seed: int, collect_telemetry: bool = False) -> tuple[list[tuple[int, int, float]], dict | None]:
+def play_evaluation_game(config: SimulationConfig, scenario: Scenario | None, brain_name: str, genomes: list[np.ndarray], seed: int, collect_telemetry: bool = False, record: bool = False) -> tuple[list[tuple[int, int, float]], dict | None, Recording | None]:
 ```
 
 Plays one game where tribute `i` is driven by `genomes[i]`. Steps:
@@ -113,11 +118,12 @@ Plays one game where tribute `i` is driven by `genomes[i]`. Steps:
 2. Define a `factory(index, rng)` that calls `create_brain(brain_name, chaos, rng, neural, endgame_instinct)` and loads `genomes[index]` into it.
 3. Build `Game(game_config, 0, brain_factory=factory, scenario=scenario)`. Game id is always 0.
 4. If `collect_telemetry`, attach a `BehaviorTelemetry(width, height)` that tracks every tribute.
-5. `game.run()`, then look each tribute up in `result.players` by `player_id`.
+5. Play. If `record`, `Recorder(game).record_all()` plays the game while capturing every tick, and the result is read from `recording.result`. Otherwise `game.run()` plays it with no recording.
+6. Look each tribute up in `result.players` by `player_id`.
 
-Returns a list of `(placement, kills, days_survived)` in genome order, plus `telemetry.summary()` or `None`.
+Returns a 3-tuple: a list of `(placement, kills, days_survived)` in genome order, then `telemetry.summary()` or `None`, then the `Recording` or `None`.
 
-It is a top-level function (not a method) so worker processes can import and run it. The telemetry here counts *all* tributes, because every tribute in an evaluation game is a population member.
+It is a top-level function (not a method) so worker processes can import and run it. The telemetry here counts *all* tributes, because every tribute in an evaluation game is a population member. The recording is of the same game the scores come from, so what the feed shows is exactly what was scored.
 
 ### `play_validation_game(...)`
 
@@ -125,18 +131,18 @@ It is a top-level function (not a method) so worker processes can import and run
 def play_validation_game(config: SimulationConfig, scenario: Scenario | None, brain_name: str, genome: np.ndarray, learner_ids: list[int], seed: int) -> list[tuple[int, int, float]]:
 ```
 
-Plays one game where the tribute slots in `learner_ids` carry the champion `genome` and everyone else gets `create_brain(config.brain_name, ...)`, the config's default brain (`"voting"` unless changed). The player count is the config's own `num_players`. Returns `(placement, kills, days)` for the learners only. No telemetry.
+Plays one game where the tribute slots in `learner_ids` carry the champion `genome` and everyone else gets `create_brain(config.brain_name, ...)`, the config's default brain (`"voting"` unless changed). The player count is the config's own `num_players`. Returns `(placement, kills, days)` for the learners only. No telemetry, no recording.
 
 Design reasoning: the opponents never change and the seed is fixed, so the same champion always gets the same score. This is the held-out test set of the GA.
 
 ### `_run_job(args)` and `_run_validation_job(args)`
 
 ```python
-def _run_job(args: tuple) -> tuple[list[tuple[int, int, float]], dict | None]:
+def _run_job(args: tuple) -> tuple[list[tuple[int, int, float]], dict | None, Recording | None]:
 def _run_validation_job(args: tuple) -> list[tuple[int, int, float]]:
 ```
 
-Each unpacks a tuple and forwards to the matching play function. `ProcessPoolExecutor.map` sends one argument per call, so a tuple-unpacking wrapper is the simplest way to pass six arguments.
+Each unpacks a tuple and forwards to the matching play function. `ProcessPoolExecutor.map` sends one argument per call, so a tuple-unpacking wrapper is the simplest way to pass seven arguments. `_run_job` returns the same 3-tuple as `play_evaluation_game`.
 
 ### `GeneticTrainer`
 
@@ -152,7 +158,7 @@ Evolves a population of genomes by playing them against each other.
 def __init__(self, config: SimulationConfig, training: TrainingConfig, scenario: Scenario | None = None) -> None:
 ```
 
-Stores `config`, `training` and `scenario`, seeds `self.rng = np.random.default_rng(training.seed)`, builds one template brain to learn the genome length, and raises `ValueError` if that length is 0. Then it creates `population_size` fresh brains and keeps their genomes, so every starting genome is drawn by the brain's own initializer (see [../brain/initializers.md](../brain/initializers.md)). Also sets up `fitness` (zeros), `history`, `generation = 0`, `_stop`, `_started` (the training start time, `None` until the first generation) and `_last_telemetry`.
+Stores `config`, `training` and `scenario`, seeds `self.rng = np.random.default_rng(training.seed)`, builds one template brain to learn the genome length, and raises `ValueError` if that length is 0. Then it creates `population_size` fresh brains and keeps their genomes, so every starting genome is drawn by the brain's own initializer (see [../brain/initializers.md](../brain/initializers.md)). Also sets up `fitness` (zeros), `history`, `generation = 0`, `_stop`, `_started` (the training start time, `None` until the first generation), `_last_telemetry` (the telemetry summaries from the last `evaluate()`) and `_last_showcase` (the recording made by the last `evaluate()`, or `None`).
 
 #### `_make_jobs()`
 
@@ -170,7 +176,9 @@ Example: 48 genomes, 24 players, 2 rounds gives 4 jobs. With 50 genomes the padd
 def evaluate(self, on_progress: Callable[[int, int], None] | None = None) -> np.ndarray:
 ```
 
-Plays every job and returns the mean fitness of each genome (also stored in `self.fitness`). Each job's arguments are `(config, scenario, brain_name, genomes, seed, collect_telemetry)`. An inner `absorb(job_index, job_result)` adds each tribute's `fitness_of(...)` into `totals`, counts the game, keeps the telemetry summary, and calls `on_progress(done, total)`. With `workers > 1` the jobs go through `pool.map(_run_job, arguments)`, which returns results in job order; otherwise they run one at a time. The mean is `totals / max(counts, 1)`.
+Plays every job and returns the mean fitness of each genome (also stored in `self.fitness`). Each job's arguments are `(config, scenario, brain_name, genomes, seed, collect_telemetry, record)`, where `record` is `job_index == 0 and self.training.record_showcase`. So at most one job per generation records, and it is always the first one. Before playing, `_last_telemetry` is emptied and `_last_showcase` is set to `None`.
+
+An inner `absorb(job_index, job_result)` unpacks the 3-tuple `(outcome, telemetry, recording)`, keeps the telemetry summary if there is one, keeps the recording in `_last_showcase` if there is one, adds each tribute's `fitness_of(...)` into `totals`, counts the game, and calls `on_progress(done, total)`. With `workers > 1` the jobs go through `pool.map(_run_job, arguments)`, which returns results in job order; otherwise they run one at a time. The mean is `totals / max(counts, 1)`.
 
 #### `_tournament()`
 
@@ -194,7 +202,7 @@ Picks a parent by tournament. With probability `crossover_rate`, picks a second 
 def _learner_ids(self) -> list[int]:
 ```
 
-Which tribute slots the champion takes in validation games: `count = max(1, num_players // 4)` slots, spread as `int(i * num_players / count)`. With 24 players that is `[0, 4, 8, 12, 16, 20]`. Spreading them means the learners are not all neighbours on the starting podiums.
+Which tribute slots the champion takes in validation games: `count = max(1, num_players // 4)` slots, spread as `int(i * num_players / count)`. With 24 players that is `[0, 4, 8, 12, 16, 20]`. Spreading them means the learners are not all neighbours on the starting podiums. The dashboard's "live" feed mode uses the same slots when it lets the newest champion play.
 
 #### `validate(genome)`
 
@@ -217,7 +225,7 @@ One full generation:
 3. `ranking = np.argsort(fitness)[::-1]`, best first. The champion is a copy of `population[ranking[0]]`.
 4. `val_fitness = self.validate(champion)`.
 5. Merge this generation's telemetry with `BehaviorTelemetry.merge(self._last_telemetry)`, or `{}` if none.
-6. Build `GenerationStats` (best, mean, worst, champion, seconds, val_fitness, cumulative seconds, telemetry) and append it to `history`.
+6. Build `GenerationStats` (best, mean, worst, champion, seconds, val_fitness, cumulative seconds, telemetry, and `self._last_showcase` as the showcase) and append it to `history`.
 7. Keep `elite_count = max(1, int(elite_fraction * population_size))` elites as copies, fill the rest with `_child()`, replace the population, and increment `generation`.
 
 Returns the stats. Note the order: the population is replaced *after* the stats are recorded, so `history[-1].champion` is the best genome of the population that was just scored, and it survives into the next population as elite number one.
@@ -244,7 +252,7 @@ Sets `_stop`. A running `run()` finishes the current generation and returns. The
 def history_rows(self) -> list[dict]:
 ```
 
-`[stats.to_row() for stats in self.history]`. This is what `history.json` and the dashboard's training table contain.
+`[stats.to_row() for stats in self.history]`. This is what `history.json` and the dashboard's training table contain. No genomes, telemetry or recordings.
 
 #### `previous_champion()`
 
@@ -317,6 +325,17 @@ if __name__ == "__main__":
     main()
 ```
 
+**Watch a generation.** Every `GenerationStats` carries a full recording of its first evaluation game. Save one as a replay, or export it as a GIF:
+
+```python
+from hunger_games.renderer import export_recording_gif
+
+trainer.history[-1].showcase.save("gen_last.replay")
+export_recording_gif(trainer.history[-1].showcase, "gen_last.gif")
+```
+
+The dashboard does this for you: set the training feed to "replay" and it loads each new generation's showcase as soon as the arena is free. See [../ui/session.md](../ui/session.md).
+
 **Read the validation curve, not the training curve.** Plot `val_fitness` per generation. If `best_fitness` climbs but `val_fitness` is flat, the population is only getting better at beating itself.
 
 **Change what is optimised.** Set `kills_weight=0.5` to breed hunters, or `days_weight=0.1, kills_weight=0.0` to breed survivors. Then compare the `deaths_by_cause.png` and `action_distribution_over_training.png` charts in the run folders (see [runs.md](runs.md)).
@@ -328,7 +347,9 @@ if __name__ == "__main__":
 ## Gotchas
 
 - **The macOS spawn rule.** On macOS, `multiprocessing` starts workers with `spawn`, which imports your script afresh in each worker. Without `if __name__ == "__main__":` the worker re-runs the training code at import time and you get a recursion of processes or a `RuntimeError` about the bootstrapping phase. It also means the code must live in a file: the interactive prompt and notebooks cannot be re-imported. The dashboard avoids the issue by running the trainer in a thread with `workers=1` by default.
-- Everything sent to a worker is pickled: `config`, `scenario`, the genomes. A `Scenario` with a large painted map is copied once per job. Keep `rounds_per_generation` modest if the map is big.
+- Everything sent to a worker is pickled: `config`, `scenario`, the genomes. A `Scenario` with a large painted map is copied once per job. Keep `rounds_per_generation` modest if the map is big. With `workers > 1` the first job's `Recording` is pickled back from the worker too, which is one frame per tick of extra transfer per generation.
+- **Showcases stay in memory.** Every generation's recording lives in `history` until the trainer is dropped. On a long run with a big map that adds up. Set `record_showcase=False` for runs of hundreds of generations, or for anything where nobody is watching.
+- The showcase is always the *first* job of the generation, the first `num_players` genomes of the first round's shuffle. Padding is appended at the end of the order, so it only reaches the first game when the population is smaller than the player count. It is one real evaluation game, not a game of champions; with 48 genomes and 24 players, the champion of the generation is in it only half the time.
 - `champion` is picked by training `best_fitness`, which is a coevolution score. The generation with the highest `val_fitness` may be a different one; `max(trainer.history, key=lambda s: s.val_fitness).champion` gives that genome.
 - Fitness for a neural brain starts near 0.5 and often stays there for many generations. The default 20 generations is a smoke test, not a serious run. Expect to need hundreds of generations and a larger population.
 - `collect_telemetry=True` roughly doubles evaluation time on small maps. Turn it off for fast sweeps of GA settings, but then `save_run` writes no behaviour charts.
