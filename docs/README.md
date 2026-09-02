@@ -41,6 +41,7 @@ you want to click before you read.
 | [renderer.md](renderer.md) | `renderer.py` | Drawing games and exporting GIFs |
 | [analysis.md](analysis.md) | `analysis.py` | The chapter 3 charts |
 | [training/init.md](training/init.md) | `training/__init__.py` | The training package |
+| [training/imitation.md](training/imitation.md) | `training/imitation.py` | Imitation pretraining: copying the voting brain's instincts |
 | [training/genetic.md](training/genetic.md) | `training/genetic.py` | The genetic algorithm trainer |
 | [training/reinforce.md](training/reinforce.md) | `training/reinforce.py` | REINFORCE with a value baseline |
 | [training/runs.md](training/runs.md) | `training/runs.py` | Writing a training run folder |
@@ -81,6 +82,7 @@ you want to click before you read.
 | [tests/test_ui_session.md](tests/test_ui_session.md) | `test_ui_session.py` | The painter and the session |
 | [tests/test_research.md](tests/test_research.md) | `test_research.py` | Gradient checks, telemetry, RL, sweeps, plots |
 | [tests/test_feed.md](tests/test_feed.md) | `test_feed.py` | Showcase recordings and the training feed |
+| [tests/test_imitation.md](tests/test_imitation.md) | `test_imitation.py` | Imitation pretraining and warm starts |
 
 ## Results: `output/`
 

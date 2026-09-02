@@ -66,8 +66,9 @@ class TerrainConfig:
 class NeuralConfig:
     """The shape and starting weights of the neural-network brain (see brain/neural.py)."""
 
-    # Width of each hidden layer, in order. (16,) is one layer of 16 neurons; (32, 16) is two layers.
-    hidden_layers: tuple[int, ...] = (16,)
+    # Width of each hidden layer, in order. (64, 32) is two layers; measured: it copies the voting brain
+    # 80% of the time after imitation pretraining, where a single 16-neuron layer manages 64%.
+    hidden_layers: tuple[int, ...] = (64, 32)
     # The squashing function between layers: tanh, relu, leaky_relu, sigmoid or selu.
     activation: str = "tanh"
     # How the starting weights are drawn (see brain/initializers.py for the full list).
@@ -99,6 +100,10 @@ class RewardConfig:
     damage_taken: float = -2.0
     # Bonus per point of thirst or hunger restored while the bar was below half.
     need_gain: float = 0.5
+    # Bonus per cell moved closer to water while thirsty (below half), or to grass while hungry with no food.
+    # A dense "shaping" reward. Off by default: the preferred way to give a fresh network instincts is to
+    # pretrain it by imitation (training/imitation.py) and warm-start the trainer from that network.
+    approach: float = 0.0
     # End-of-game bonus scaled by placing: this much for first, nothing for last.
     placement: float = 2.0
     # Discount factor: how much a reward one tick later is worth compared to now.

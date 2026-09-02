@@ -549,7 +549,67 @@ def training_run_plots(history_rows: list[dict], summaries: list[dict], folder: 
     step = "generation" if method == "genetic" else "epoch"
     xs = [row[step] for row in history_rows]
     # Performance curves.
-    if method == "genetic":
+    if method == "imitation":
+        written.append(
+            curves(
+                xs,
+                {
+                    "training loss": [r["train_loss"] for r in history_rows],
+                    "validation loss": [r["val_loss"] for r in history_rows],
+                },
+                "Imitation loss (cross-entropy)",
+                step,
+                "loss",
+                folder / "losses.png",
+            )
+        )
+        written.append(
+            curves(
+                xs,
+                {
+                    "training accuracy": [r["train_accuracy"] for r in history_rows],
+                    "validation accuracy": [r["val_accuracy"] for r in history_rows],
+                },
+                "How often the student picks the teacher's action",
+                step,
+                "accuracy",
+                folder / "accuracy.png",
+            )
+        )
+        written.append(
+            curves(
+                xs,
+                {"validation survival (ticks)": [r["val_survival"] for r in history_rows]},
+                "Student survival in validation games",
+                step,
+                "ticks",
+                folder / "survival.png",
+            )
+        )
+        written.append(
+            curves(
+                xs,
+                {"validation win rate": [r["val_win_rate"] for r in history_rows]},
+                "Student win rate in validation games",
+                step,
+                "rate",
+                folder / "win_rate.png",
+            )
+        )
+        written.append(
+            curve_gif(
+                xs,
+                {
+                    "training": [r["train_loss"] for r in history_rows],
+                    "validation": [r["val_loss"] for r in history_rows],
+                },
+                "Imitation loss (cross-entropy)",
+                step,
+                "loss",
+                folder / "losses.gif",
+            )
+        )
+    elif method == "genetic":
         written.append(
             curves(
                 xs,

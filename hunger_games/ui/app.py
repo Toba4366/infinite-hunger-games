@@ -48,7 +48,7 @@ from hunger_games.resources import ResourceKind, weapon_name
 from hunger_games.terrain import TerrainType
 
 # Training settings.
-from hunger_games.training import RLConfig, TrainingConfig
+from hunger_games.training import ImitationConfig, RLConfig, TrainingConfig
 
 # The canvas.
 from hunger_games.ui.canvas import ArenaCanvas
@@ -141,6 +141,8 @@ class Dashboard:
         self.ga = TrainingConfig()
         # RL settings.
         self.rl = RLConfig()
+        # Imitation settings.
+        self.imitation = ImitationConfig()
         # Which method the Train tab uses.
         self.method = "genetic"
         # A brush ring to draw when the mouse is not over the arena (used by the screenshot tool).
@@ -424,9 +426,11 @@ class Dashboard:
         ),
         (
             "7. Train and watch training",
-            "The Train tab evolves brains (genetic) or trains by reward (reinforce). Set the training feed to 'replay' "
-            "to watch a real evaluation game from every step, or 'live' to watch the newest champion play with real "
-            "activations. Show me starts a short evolution of voting brains.",
+            "For a neural brain start with 'imitation': it copies the voting brain's decisions so the network has "
+            "instincts instead of dying of thirst on day three. Then keep 'start from the current champion' ticked and "
+            "pick 'genetic' (small mutation scale) or 'reinforce'. Set the training feed to 'replay' to watch a real "
+            "evaluation game from every step, or 'live' to watch the newest champion play with real activations. "
+            "Show me starts a short evolution of voting brains.",
             "train",
         ),
         (
@@ -497,6 +501,7 @@ class Dashboard:
         # Train.
         elif name == "train":
             # A short, fixed evolution of voting brains; the Train tab's own settings are left alone.
+            dpg.set_value("train_method", "genetic")
             self._on_method(None, "genetic")
             self.session.feed_mode = "live"
             dpg.set_value("feed_mode", "live")
@@ -1304,11 +1309,85 @@ class Dashboard:
         """Genetic-algorithm and policy-gradient training."""
         # Method.
         dpg.add_radio_button(
-            ["genetic", "reinforce"], default_value=self.method, horizontal=True, callback=self._on_method
+            ["imitation", "genetic", "reinforce"],
+            default_value=self.method,
+            horizontal=True,
+            callback=self._on_method,
+            tag="train_method",
         )
         self._tip(
             "genetic: evolve a population of genomes by playing them against each other (works for neural and voting brains). reinforce: policy gradient with a value baseline, rewarding every action (neural only)."
         )
+        # GA settings.
+        # Warm start.
+        dpg.add_checkbox(label="start from the current champion", default_value=True, tag="warm_start")
+        self._tip(
+            "Seeds the next run with the champion of the last one (or a loaded champion file). Pretrain by imitation, then keep this ticked and evolve or reinforce from that network. For the genetic method use a small mutation scale (about 0.02) so the instincts survive."
+        )
+        # Imitation settings.
+        with dpg.group(tag="im_group", show=False):
+
+            def im(name, convert=lambda v: v):
+                return lambda s, a: setattr(self.imitation, name, convert(a))
+
+            dpg.add_combo(
+                ["voting"], label="teacher brain", default_value=self.imitation.teacher, callback=im("teacher")
+            )
+            self._tip("The brain whose decisions the network learns to copy: the video's instinct-voting brain.")
+            dpg.add_input_int(
+                label="demonstration games",
+                default_value=self.imitation.demonstration_games,
+                min_value=1,
+                max_value=200,
+                min_clamped=True,
+                max_clamped=True,
+                callback=im("demonstration_games"),
+            )
+            self._tip(
+                "Teacher games to record. Each gives about 24 tributes x hundreds of ticks of (perception, action) pairs."
+            )
+            dpg.add_input_int(
+                label="epochs",
+                default_value=self.imitation.epochs,
+                min_value=1,
+                max_value=1000,
+                min_clamped=True,
+                max_clamped=True,
+                callback=im("epochs"),
+            )
+            dpg.add_input_int(
+                label="batch size",
+                default_value=self.imitation.batch_size,
+                min_value=8,
+                max_value=4096,
+                min_clamped=True,
+                max_clamped=True,
+                callback=im("batch_size"),
+            )
+            dpg.add_input_float(
+                label="learning rate",
+                default_value=self.imitation.learning_rate,
+                format="%.5f",
+                callback=im("learning_rate"),
+            )
+            dpg.add_input_int(
+                label="validation games",
+                default_value=self.imitation.validation_games,
+                min_value=0,
+                max_value=20,
+                min_clamped=True,
+                max_clamped=True,
+                callback=im("validation_games"),
+            )
+            dpg.add_input_int(
+                label="CPU workers",
+                default_value=self.imitation.workers,
+                min_value=1,
+                max_value=32,
+                min_clamped=True,
+                max_clamped=True,
+                callback=im("workers"),
+            )
         # GA settings.
         with dpg.group(tag="ga_group"):
 
@@ -1596,6 +1675,7 @@ class Dashboard:
         # Remember.
         self.method = value
         # Show the right group.
+        dpg.configure_item("im_group", show=value == "imitation")
         dpg.configure_item("ga_group", show=value == "genetic")
         dpg.configure_item("rl_group", show=value == "reinforce")
 
@@ -1603,11 +1683,15 @@ class Dashboard:
         """Start the trainer with the current settings."""
         # Reset the plots.
         self._plotted_steps = -1
+        # Warm start?
+        warm = bool(dpg.get_value("warm_start"))
         # Go.
         if self.method == "genetic":
-            self.session.start_training(TrainingConfig(**vars(self.ga)), "genetic")
+            self.session.start_training(TrainingConfig(**vars(self.ga)), "genetic", warm)
+        elif self.method == "reinforce":
+            self.session.start_training(RLConfig(**vars(self.rl)), "reinforce", warm)
         else:
-            self.session.start_training(RLConfig(**vars(self.rl)), "reinforce")
+            self.session.start_training(ImitationConfig(**vars(self.imitation)), "imitation", warm)
 
     def _on_champion_selected(self) -> None:
         """Give the champion to the selected tribute."""
@@ -1651,8 +1735,22 @@ class Dashboard:
         # X axis.
         genetic = self.session.training_method == "genetic"
         xs = [float(r["generation" if genetic else "epoch"]) for r in rows]
-        # Performance.
-        if genetic:
+        # Performance and stability, per method.
+        method = self.session.training_method
+        if method == "imitation":
+            dpg.set_value("perf_train", [xs, [r["train_accuracy"] for r in rows]])
+            dpg.set_value("perf_val", [xs, [r["val_accuracy"] for r in rows]])
+            dpg.set_value("perf_mean", [xs, [r["val_win_rate"] for r in rows]])
+            dpg.configure_item("perf_train", label="training accuracy")
+            dpg.configure_item("perf_val", label="validation accuracy")
+            dpg.configure_item("perf_mean", label="validation win rate")
+            dpg.set_value("stab_ploss", [xs, [r["train_loss"] for r in rows]])
+            dpg.set_value("stab_vloss", [xs, [r["val_loss"] for r in rows]])
+            dpg.configure_item("stab_ploss", label="training loss")
+            dpg.configure_item("stab_vloss", label="validation loss")
+            dpg.set_value("stab_entropy", [xs, [r["val_survival"] / 100.0 for r in rows]])
+            dpg.configure_item("stab_entropy", label="validation survival (x100 ticks)")
+        elif genetic:
             dpg.set_value("perf_train", [xs, [r["best_fitness"] for r in rows]])
             dpg.set_value("perf_val", [xs, [r["val_fitness"] for r in rows]])
             dpg.set_value("perf_mean", [xs, [r["mean_fitness"] for r in rows]])
@@ -1672,7 +1770,10 @@ class Dashboard:
             dpg.configure_item("perf_mean", label="win rate")
             dpg.set_value("stab_ploss", [xs, [r["policy_loss"] for r in rows]])
             dpg.set_value("stab_vloss", [xs, [r["value_loss"] for r in rows]])
+            dpg.configure_item("stab_ploss", label="policy loss")
+            dpg.configure_item("stab_vloss", label="value loss")
             dpg.set_value("stab_entropy", [xs, [r["entropy"] for r in rows]])
+            dpg.configure_item("stab_entropy", label="entropy")
         # Behaviour entropy for the GA comes from telemetry.
         if genetic:
             history = self.session.training_history()
@@ -1706,7 +1807,12 @@ class Dashboard:
         # Summary.
         last = rows[-1]
         total_seconds = last.get("cumulative_seconds", sum(r["seconds"] for r in rows))
-        if genetic:
+        if method == "imitation":
+            dpg.set_value(
+                "train_summary",
+                f"{len(rows)} epoch(s), {total_seconds:.0f}s total. Validation accuracy {last['val_accuracy']:.0%}, loss {last['val_loss']:.3f}, survival {last['val_survival']:.0f} ticks, win rate {last['val_win_rate']:.2f}. Keep 'start from the current champion' ticked and evolve or reinforce from here.",
+            )
+        elif genetic:
             best = max(rows, key=lambda r: r["best_fitness"])
             dpg.set_value(
                 "train_summary",
@@ -1758,7 +1864,7 @@ class Dashboard:
         # Questions.
         dpg.add_text("Answers a reviewer will ask for", color=(242, 214, 72))
         dpg.add_text(
-            "Method: genetic algorithm (neuroevolution) or REINFORCE with a value baseline, chosen on the Train tab. Rewards: the Reward function section there. Observation: a 50-value vector (Brains tab lists it), not a grid. Dashboard: custom, Dear PyGui; charts by matplotlib.",
+            "Method: imitation (behaviour cloning of the voting brain, supervised cross-entropy), genetic algorithm (neuroevolution) or REINFORCE with a value baseline, chosen on the Train tab, with warm starts between them. Rewards: the Reward function section there (the dense approach reward is off by default). Observation: a 50-value vector (Brains tab lists it), not a grid. Dashboard: custom, Dear PyGui; charts by matplotlib.",
             wrap=360,
             color=(160, 160, 170),
         )

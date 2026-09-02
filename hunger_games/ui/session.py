@@ -54,7 +54,15 @@ from hunger_games.scenario import LootSpec, Scenario, TributeSpec
 from hunger_games.terrain import TerrainType
 
 # The trainers and run folders.
-from hunger_games.training import GeneticTrainer, ReinforceTrainer, RLConfig, TrainingConfig, save_run
+from hunger_games.training import (
+    GeneticTrainer,
+    ImitationConfig,
+    ImitationTrainer,
+    ReinforceTrainer,
+    RLConfig,
+    TrainingConfig,
+    save_run,
+)
 
 # The painter.
 from hunger_games.ui.painter import MapPainter
@@ -766,11 +774,33 @@ class Session:
         # Check the thread.
         return self._training_thread is not None and self._training_thread.is_alive()
 
-    def start_training(self, settings: TrainingConfig | RLConfig, method: str = "genetic") -> None:
-        """Start a trainer (genetic or reinforce) in a background thread on the painted map."""
+    def warm_start_genome(self) -> np.ndarray | None:
+        """A genome to start the next training run from: the current champion, else a trained roster genome."""
+        # The current trainer's champion.
+        if self.trainer is not None and self.trainer.champion is not None:
+            return np.asarray(self.trainer.champion, dtype=float)
+        # Else the first roster tribute carrying a neural genome (for example a loaded champion file).
+        for spec in self.tributes:
+            if spec.genome is not None and spec.brain_name == "neural":
+                return np.asarray(spec.genome, dtype=float)
+        # Nothing to start from.
+        return None
+
+    def start_training(
+        self,
+        settings: TrainingConfig | RLConfig | ImitationConfig,
+        method: str = "genetic",
+        warm_start: bool = False,
+    ) -> None:
+        """Start a trainer (genetic, reinforce or imitation) in a background thread on the painted map."""
         # One at a time.
         if self.training_running:
             return
+        # A genome to start from, if asked and available (only neural genomes fit neural trainers).
+        initial = self.warm_start_genome() if warm_start else None
+        # The genetic trainer can only warm-start a brain of the same kind.
+        if method == "genetic" and initial is not None and getattr(settings, "brain_name", "neural") != "neural":
+            initial = None
         # A config copy with the roster's player count.
         config = SimulationConfig(
             **{**self.config.to_dict_raw(), "num_players": max(2, len(self.tributes) or self.config.num_players)}
@@ -784,9 +814,11 @@ class Session:
         self.feed_label = ""
         # Build.
         if method == "genetic":
-            self.trainer = GeneticTrainer(config, settings, scenario=scenario)
+            self.trainer = GeneticTrainer(config, settings, scenario=scenario, initial_genome=initial)
+        elif method == "reinforce":
+            self.trainer = ReinforceTrainer(config, settings, scenario=scenario, initial_genome=initial)
         else:
-            self.trainer = ReinforceTrainer(config, settings, scenario=scenario)
+            self.trainer = ImitationTrainer(config, settings, scenario=scenario, initial_genome=initial)
 
         # Progress callback.
         def progress(done: int, total: int) -> None:
@@ -805,7 +837,7 @@ class Session:
         # Go.
         self._training_thread.start()
         # Say so.
-        self.status = f"Training ({method})..."
+        self.status = f"Training ({method}{', warm start' if initial is not None else ''})..."
 
     def stop_training(self) -> None:
         """Ask the trainer to stop after the current generation."""
@@ -828,7 +860,7 @@ class Session:
         # Need history.
         if self.trainer is None or not self.trainer.history:
             return None
-        # Latest.
+        # Latest (the GA keeps champions, the other trainers keep the policy per step).
         if self.training_method == "genetic":
             latest = self.trainer.history[-1].champion
             previous = self.trainer.previous_champion()
@@ -915,12 +947,9 @@ class Session:
 
     def save_champion(self, path: str | Path) -> None:
         """Save the champion genome."""
-        # Delegate (each trainer has its own file writer).
+        # Every trainer writes the same file shape.
         if self.trainer is not None and self.trainer.champion is not None:
-            if self.training_method == "genetic":
-                self.trainer.save_champion(path)
-            else:
-                self.trainer.save_policy(path)
+            self.trainer.save_champion(path)
             # Say so.
             self.status = f"Saved champion to {path}"
 

@@ -1,6 +1,6 @@
 # Proving a brain is learning the right behaviours
 
-A guide for a researcher who wants to show, with charts, that a trained tribute is not just winning more but doing the sensible things: drinking when thirsty, fleeing when hurt, avoiding crowds early and seeking them late. Every chart below is one PNG from [plots.md](plots.md), fed by counts from [telemetry.md](telemetry.md), collected while the trainers in [../training/genetic.md](../training/genetic.md) and [../training/reinforce.md](../training/reinforce.md) play their games. Sweeps over settings come from [experiments.md](experiments.md).
+A guide for a researcher who wants to show, with charts, that a trained tribute is not just winning more but doing the sensible things: drinking when thirsty, fleeing when hurt, avoiding crowds early and seeking them late. Every chart below is one PNG from [plots.md](plots.md), fed by counts from [telemetry.md](telemetry.md), collected while the trainers in [../training/genetic.md](../training/genetic.md), [../training/reinforce.md](../training/reinforce.md) and `training/imitation.py` play their games. Sweeps over settings come from [experiments.md](experiments.md).
 
 The pages in this folder:
 
@@ -28,13 +28,14 @@ Who is measured matters:
 | `Runner` batches and sweeps | Every tribute | With the default voting brain, the charts describe hand-coded behaviour |
 | GA evaluation games | Every tribute, all driven by population genomes | The whole population's behaviour, not just the champion's |
 | RL episodes | The 6 learner slots only | Opponents (voting brain) are excluded, so the charts show the policy alone |
+| Imitation validation games | The 6 student slots only | The greedy student alone, against the config's brain |
 | Dashboard watched games | Every tribute on the roster | Whatever brains the roster has, mixed |
 
 ## Where the numbers live
 
 | File | Written by | Contents |
 | --- | --- | --- |
-| `results/<run>/history.json` | `save_run` | One row per step. GA: `generation`, `best_fitness`, `mean_fitness`, `worst_fitness`, `val_fitness`, `seconds`, `cumulative_seconds`. RL: `epoch`, `policy_loss`, `value_loss`, `entropy`, `train_return`, `val_return`, `train_survival`, `val_survival`, `win_rate`, `val_win_rate`, `kill_rate`, `seconds`, `cumulative_seconds` |
+| `results/<run>/history.json` | `save_run` | One row per step. GA: `generation`, `best_fitness`, `mean_fitness`, `worst_fitness`, `val_fitness`, `seconds`, `cumulative_seconds`. RL: `epoch`, `policy_loss`, `value_loss`, `entropy`, `train_return`, `val_return`, `train_survival`, `val_survival`, `win_rate`, `val_win_rate`, `kill_rate`, `seconds`, `cumulative_seconds`. Imitation: `epoch`, `train_loss`, `val_loss`, `train_accuracy`, `val_accuracy`, `val_survival`, `val_win_rate`, `seconds`, `cumulative_seconds` |
 | `results/<run>/champion.json` | `save_run` | The best genome or policy, loadable from the dashboard's Train tab |
 | `results/<sweep>/results.csv` | `Sweep.write` | One row per swept value with every metric |
 | `results/<sweep>/summary.json` | `Sweep.write` | The rows plus one merged telemetry summary per value |
@@ -53,10 +54,11 @@ A reviewer asks three things. Is it performing better? Is it behaving sensibly? 
 | --- | --- | --- | --- |
 | Is reward per episode rising? | `reward.png`, `reward.gif` | `train_return`, `val_return` per epoch | `plots.curves`, `plots.curve_gif` via `training_run_plots` |
 | Is fitness rising? (GA) | `fitness.png`, `fitness.gif` | `best_fitness`, `mean_fitness`, `val_fitness` per generation | same |
-| Are tributes living longer? | `survival.png` (RL), `behaviour_over_training.png` panel 1 | `train_survival`, `val_survival`; `mean_survival_ticks` | `plots.curves`, `plots.behaviour_metrics_over_training` |
-| Are they winning and killing more? | `win_kill_rate.png` (RL), `behaviour_over_training.png` panels 2 and 3 | `win_rate`, `val_win_rate`, `kill_rate` | same |
+| Does the student copy the teacher? (imitation) | `accuracy.png` | `train_accuracy`, `val_accuracy` per epoch | same |
+| Are tributes living longer? | `survival.png` (RL and imitation), `behaviour_over_training.png` panel 1 | `train_survival`, `val_survival`; `mean_survival_ticks` | `plots.curves`, `plots.behaviour_metrics_over_training` |
+| Are they winning and killing more? | `win_kill_rate.png` (RL), `win_rate.png` (imitation), `behaviour_over_training.png` panels 2 and 3 | `win_rate`, `val_win_rate`, `kill_rate` | same |
 
-**What a good trend looks like.** Training return rises and then flattens. Validation return follows it. Validation is played with the greedy policy on fixed seeds against the config's brain, so it is the honest number. A big gap with training high and validation flat means the policy is exploiting its own sampling noise, not the game. Survival ticks should rise before win rate does, because staying alive is the first thing the reward teaches. Win rate on a 24-tribute field is small by nature; 6 learners winning 1 game in 4 is a 4 percent per-learner rate and already strong. For the GA, best fitness rising while mean fitness follows a few generations behind is healthy; mean fitness stuck near the start while best fitness jumps around means the games are too noisy, so raise `rounds_per_generation`.
+**What a good trend looks like.** Training return rises and then flattens. Validation return follows it. Validation is played with the greedy policy on fixed seeds against the config's brain, so it is the honest number. A big gap with training high and validation flat means the policy is exploiting its own sampling noise, not the game. Survival ticks should rise before win rate does, because staying alive is the first thing the reward teaches. Win rate on a 24-tribute field is small by nature; 6 learners winning 1 game in 4 is a 4 percent per-learner rate and already strong. For the GA, best fitness rising while mean fitness follows a few generations behind is healthy; mean fitness stuck near the start while best fitness jumps around means the games are too noisy, so raise `rounds_per_generation`. For imitation, validation accuracy climbing with training accuracy and then flattening is what you want; with the default 64 by 32 network it flattens near 80 percent. Validation loss rising while training loss keeps falling is overfitting to the demonstrations.
 
 ## 2. Behaviour
 
@@ -80,7 +82,7 @@ These charts read a telemetry summary. In a training run folder the detailed one
 
 **What a good trend looks like, chart by chart.**
 
-- **Stacked area over training.** Early epochs show nine bands of roughly equal width, because a fresh network samples almost uniformly. Later the `move` band widens, `drink` and `eat` take a steady slice, and `rest` shrinks. A single band swallowing the chart is collapse.
+- **Stacked area over training.** Early epochs show nine bands of roughly equal width, because a fresh network samples almost uniformly. Later the `move` band widens, `drink` and `eat` take a steady slice, and `rest` shrinks. A single band swallowing the chart is collapse. A warm-started run begins with the structured shape already; look for it to change without falling apart.
 - **Position heatmap.** For the ring layout, a good brain lights up the water and grass and the loot ring, with a visible trail to the centre late in the game. A uniform smear means aimless wandering. A single hot cell means the brain has learned to stand still.
 - **Armed versus unarmed.** Armed tributes should be brighter in the centre; unarmed ones near the edges and water. If both panels look the same the network is not using the `weapon quality` input.
 - **Resource levels at death.** Thirst and hunger at death should rise over training. That sounds backwards until you remember what it means: tributes stop dying with empty bars, so the deaths that remain are fights with the bars still full. Health at death is always near zero.
@@ -90,36 +92,44 @@ These charts read a telemetry summary. In a training run folder the detailed one
 - **Survival after injury.** Longer `post_injury_ticks` over training means the brain has learned to heal, hide or rest once hurt. Compare the list's mean between the first and last step.
 - **Proximity versus tributes remaining.** A downward slope from "most alive" to "final few". The tribute keeps others at arm's length early, then closes in. Flat means it ignores the field size.
 - **Actions by tributes remaining.** The attack share should grow toward "final few". The video's endgame instinct is the hand-coded version of this; a learned one should appear without the toggle.
+- **Deaths by cause.** The clearest single number for a fresh network. Measured on the default setup: untrained, 10 of 12 learner deaths were dehydration; after imitation pretraining, 2 of 12.
 
 ## 3. Training stability
 
 | Question | Chart | Data | Code |
 | --- | --- | --- | --- |
 | Is the policy collapsing too early? | `entropy.png` | `entropy` per epoch (policy entropy at the decisions made) | `plots.curves` via `training_run_plots` |
-| Is the baseline learning? | `losses.png` | `policy_loss`, `value_loss` | same |
+| Is the baseline learning? | `losses.png` (RL) | `policy_loss`, `value_loss` | same |
+| Is the student overfitting? | `losses.png`, `losses.gif` (imitation) | `train_loss`, `val_loss` | same |
 | How long does each step take? | `timing.png` | `seconds`, `cumulative_seconds` | `plots.timing` |
 | Is behaviour entropy tracking? | `behaviour_over_training.png` panel 4 | `entropy` from telemetry | `plots.behaviour_metrics_over_training` |
 
-**Good trends.** Policy entropy starts near `ln 16 = 2.77` nats (sixteen menu items) and falls slowly. A fast drop to near zero in a few epochs is premature collapse; raise `entropy_bonus`. Value loss should fall and then hover. Policy loss is noisy by nature and can even be negative, because advantages are normalised each epoch; look at its scale, not its sign. Seconds per step should be flat; a rising bar chart means episodes are getting longer because tributes survive longer, which is itself evidence of learning.
+**Good trends.** Policy entropy starts near `ln 16 = 2.77` nats (sixteen menu items) for a fresh network, or lower for a warm start, and falls slowly. A fast drop to near zero in a few epochs is premature collapse; raise `entropy_bonus`. Value loss should fall and then hover. Policy loss is noisy by nature and can even be negative, because advantages are normalised each epoch; look at its scale, not its sign. For imitation both cross-entropy losses fall; the validation loss levelling off while the training loss keeps dropping is the moment to stop. Seconds per step should be flat; a rising bar chart means episodes are getting longer because tributes survive longer, which is itself evidence of learning.
 
 For the GA the dashboard's stability panel shows action entropy from telemetry rather than policy entropy, since there is no policy loss. The same falling-but-not-zero shape is what you want.
 
 ## Answers for reviewers
 
-### RL versus evolutionary
+### Which training method
 
-Two trainers share the same brain and the same game.
+Three trainers share the same brain and the same game. The intended order is imitation first, then genetic or REINFORCE from the imitation result.
 
-| | REINFORCE with baseline (`training/reinforce.py`) | Genetic algorithm (`training/genetic.py`) |
-| --- | --- | --- |
-| What is scored | Every action, tick by tick | Whole games, by placement |
-| Signal | Reward from `RewardConfig`, discounted, minus a learned value baseline, advantages normalised | Fitness `(n - placement) / (n - 1) + 0.05 kills + 0.01 days` |
-| Update | Gradient step with Adam on a numpy MLP, gradient clipped at norm 5, entropy bonus | Tournament selection, uniform crossover, Gaussian mutation, elites kept |
-| Opponents | The config's brain (voting by default); 6 learners per game | The population itself, so the target moves |
-| Validation | Greedy policy on fixed seeds `90000 + i` | Champion versus the config's brain on the same fixed seeds |
-| Works on | The neural brain only | Any brain with a genome, including the voting brain's eight genes |
+| | Imitation (`training/imitation.py`) | Genetic algorithm (`training/genetic.py`) | REINFORCE with baseline (`training/reinforce.py`) |
+| --- | --- | --- | --- |
+| What it is | Behaviour cloning: supervised learning of the voting brain's decisions | Neuroevolution: a population of genomes bred by fitness | Policy gradient with a learned value baseline |
+| What is scored | Each (perception, action) pair against the teacher's action | Whole games, by placement | Every action, tick by tick |
+| Signal | Cross-entropy of the teacher's action under the network's softmax | Fitness `(n - placement) / (n - 1) + 0.05 kills + 0.01 days` | Reward from `RewardConfig`, discounted, minus a learned value baseline, advantages normalised |
+| Update | Adam on the numpy MLP by backpropagation, mini-batches of 256, 30 epochs over about 40,000 decisions from 12 teacher games (teacher chaos 0) | Tournament selection, uniform crossover, Gaussian mutation, elites kept | Gradient step with Adam on a numpy MLP, gradient clipped at norm 5, entropy bonus |
+| Opponents | None while learning; the config's brain in validation games | The population itself, so the target moves | The config's brain (voting by default); 6 learners per game |
+| Validation | A held-out 20 percent of the demonstrations (loss and accuracy) plus greedy games on fixed seeds `90000 + i` with 6 students | Champion versus the config's brain on the same fixed seeds | Greedy policy on fixed seeds `90000 + i` |
+| Champion | The student with the lowest validation loss | The best fitness ever | The best validation return |
+| Works on | The neural brain only | Any brain with a genome, including the voting brain's eight genes | The neural brain only |
 
-REINFORCE learns faster per game because it gets a signal every tick, but the signal is noisy. The GA is slow and needs many games, but it never needs a reward function and can tune the voting brain's hand-written weights.
+**Why imitation comes first.** A fresh network picks actions almost at random, so it does not drink and dies of thirst on about day three, before winning or losing games can teach it anything. Measured on the default setup, 10 of 12 learner deaths were dehydration untrained and 2 of 12 after imitation; validation accuracy reached 80 percent with the default 64 by 32 network. Imitation cannot beat its teacher, though: it copies the voting brain's rules, at best. Genetic and REINFORCE can, because they score outcomes.
+
+**Warm starts.** Each trainer accepts an `initial_genome`. The genetic trainer builds its population as that genome plus relatives perturbed by a quarter of the mutation scale (use a small scale, about 0.02, so the instincts survive); REINFORCE and imitation load it into their network. In the dashboard the "start from the current champion" checkbox passes the previous run's champion, or a loaded champion file, into the next run. A genetic warm start only applies to neural genomes: a voting-brain run always starts fresh.
+
+REINFORCE learns faster per game than the GA because it gets a signal every tick, but the signal is noisy. The GA is slow and needs many games, but it never needs a reward function and can tune the voting brain's hand-written weights. Imitation is the cheapest of the three (no games are played while learning, only recorded first) and gives the other two a sensible place to start.
 
 ### How reward points are gained and lost
 
@@ -130,13 +140,14 @@ From `RewardConfig` in [../config.md](../config.md), attached to the decision ma
 | Surviving a tick | `+0.01` |
 | Losing health | `-2.0` per full bar lost (so a 0.1 wound costs 0.2) |
 | Restoring thirst or hunger while the bar was under half | `+0.5` per full bar restored |
+| Moving closer to water while thirsty (under half and not in water), or to grass while hungry with no food | `approach` per cell, default `0.0` (off) |
 | A kill | `+1.0` |
 | Dying | `-3.0`, once |
 | Finishing the game | `+2.0` scaled by placing, first place gets it all, last gets nothing |
 | Winning | `+5.0` on top |
 | Discount | `0.98` per tick when summing future rewards into a return |
 
-The placement and win bonuses are added to the last decision of the episode, then discounted backwards through the trajectory.
+The placement and win bonuses are added to the last decision of the episode, then discounted backwards through the trajectory. The `approach` term is a dense shaping reward, paid on the previous decision when the next perception shows the distance shrank. It exists in the code but is off by default and has no slider on the dashboard, because warm-starting from an imitation champion is the preferred way to give a fresh network its instincts; turn it on in a config file if you want to compare the two.
 
 ### How the network sees the world
 
@@ -159,19 +170,22 @@ Not a grid. `Perception.to_vector()` in [../perception.md](../perception.md) pro
 | Field | 4 | known, mean strength of the rest, strongest remaining, my rank |
 | Terrain underfoot | 4 | one-hot of water, sand, grass, rock |
 
-The output is a menu of 16 items: rest, drink, eat, hunt, pick up, heal, attack nearest, flee nearest, and eight compass moves. Hidden layers default to one layer of 16 tanh units, so the whole policy is about 1,100 weights.
+The output is a menu of 16 items: rest, drink, eat, hunt, pick up, heal, attack nearest, flee nearest, and eight compass moves. Hidden layers default to two tanh layers of 64 and 32 units, so the whole policy is 5,872 weights. A single layer of 16 (1,088 weights) copies the teacher 64 percent of the time after imitation; the default reaches 80 percent.
 
 ### How many games back each number
 
 | Number | Games behind it, with the defaults |
 | --- | --- |
+| One imitation epoch's `train_accuracy` | No new games: one pass over 80 percent of the recorded decisions (12 teacher games, about 40,000 decisions) |
+| One imitation epoch's `val_accuracy` | The other 20 percent of those decisions |
+| One imitation epoch's `val_survival` and `val_win_rate` | 1 fixed-seed game with 6 students, greedy |
 | One RL epoch's `train_return` | 4 episodes times 6 learners, so 24 learner episodes |
 | One RL epoch's `val_return` | 2 fixed-seed games times 6 learners, greedy |
 | One GA generation's `best_fitness` | Each genome plays `rounds_per_generation = 2` games; 48 genomes over 24 slots is 4 games per round, 8 games per generation |
 | One GA generation's `val_fitness` | 2 fixed-seed games with the champion in 6 slots against the voting brain |
 | One sweep row | `games_per_value = 50` games, every tribute measured |
 
-Raise `--episodes`, `--rounds` or `--games` before trusting a small difference.
+Raise `--episodes`, `--rounds` or `--games` before trusting a small difference. An imitation win rate from one validation game is 0 or a multiple of one sixth; raise `validation_games` before reading anything into it.
 
 ### What the dashboard is built with
 
@@ -189,7 +203,7 @@ python experiments/run_sweep.py --parameter chaos --values 0,0.25,0.5,0.75,1 --g
 
 Each writes `results/<name>_<timestamp>/` with `config.json`, then `history.json` and `champion.json` for a training run or `results.csv` and `summary.json` for a sweep, and `plots/`. The `--seed` values make the population, the episode seeds and the games repeatable.
 
-From the dashboard (`python -m hunger_games ui`): on the Train tab pick the method, set the same numbers, press Start training, and when it finishes type a name and press "Save run folder". On the Research tab choose a parameter, type the values, set games per value and workers, and press Start sweep. "Export behaviour charts" writes the behaviour charts for every game watched this session to a folder of your choice. A training run started from the dashboard plays on the painted map and roster, so mention that in a paper.
+From the dashboard (`python -m hunger_games ui`): on the Train tab pick the method (imitation, genetic or reinforce), decide whether "start from the current champion" should be ticked, set the same numbers, press Start training, and when it finishes type a name and press "Save run folder". The run folder's `config.json` records the method and the trainer settings; a warm start is visible only in the status line and in the first step's numbers, so note it yourself. On the Research tab choose a parameter, type the values, set games per value and workers, and press Start sweep. "Export behaviour charts" writes the behaviour charts for every game watched this session to a folder of your choice. A training run started from the dashboard plays on the painted map and roster, so mention that in a paper.
 
 ## A recipe for one figure set
 
@@ -208,6 +222,7 @@ From the dashboard (`python -m hunger_games ui`): on the Train tab pick the meth
 - Use the same number of games. Entropy and the instinct curves are ratios, but the heatmaps and histograms are counts, and `plots.heatmap` normalises by total time, which differs when tributes live longer.
 - Compare validation, not training. Training numbers are sampled at temperature 1 and drift with the entropy bonus; validation is greedy on fixed seeds.
 - State the field. A learner's win rate depends on who else is in the arena. The default opponent is the voting brain at `chaos=0.5`.
+- State the starting point. A warm-started run and a run from random weights are different experiments; say which champion seeded it.
 
 ## What the raw summary lets you compute
 
@@ -226,11 +241,11 @@ The plots cover the common questions. `summary.json` and the `telemetry` on each
 
 The Train tab draws three live panels while a trainer runs, using Dear PyGui's plot widgets rather than matplotlib:
 
-| Panel | GA lines | RL lines |
-| --- | --- | --- |
-| Performance | best fitness, validation fitness, mean fitness | training return, validation return, win rate |
-| Stability | action entropy from telemetry | policy loss, value loss, policy entropy |
-| Timing | seconds per generation | seconds per epoch |
+| Panel | Imitation lines | GA lines | RL lines |
+| --- | --- | --- | --- |
+| Performance | training accuracy, validation accuracy, validation win rate | best fitness, validation fitness, mean fitness | training return, validation return, win rate |
+| Stability | training loss, validation loss, validation survival divided by 100 | action entropy from telemetry | policy loss, value loss, policy entropy |
+| Timing | seconds per epoch | seconds per generation | seconds per epoch |
 
 Below them a gene plot shows the champion's weights, with the ones that changed since the last step in gold (the first 400 for big networks). The Charts tab in the right-hand panel, next to Inspector and Network, shows the action distribution, the instinct curves (drink, eat and flee against the need bins) and the position heatmap of every game watched in the session, updated while a game plays. The Research tab's export button writes the full set of PNGs for those same games. None of these live panels are the paper charts; press "Save run folder" on the Train tab or "Export behaviour charts" on the Research tab for those.
 
@@ -238,18 +253,20 @@ If a chart looks wrong in the window, remember two differences from the PNGs: th
 
 ## Checklist before claiming a brain has learned
 
-1. Validation return or validation fitness rises over the run, on fixed seeds, against the untrained default brain.
+1. Validation return or validation fitness rises over the run, on fixed seeds, against the untrained default brain. For an imitation run on its own, validation accuracy rises and validation loss falls; that shows copying, not learning to win.
 2. The stacked area over training changes shape. If every band keeps its width, the policy has not moved.
 3. At least one instinct curve is steep: P(drink given thirst) or P(eat given hunger) above 20 percent in the lowest bin and near zero in the highest.
 4. Fight or flight crosses over: flee above attack when health is under 40 percent.
 5. Policy entropy is above 0.5 nats at the end. Lower than that and the charts describe one habit, not a policy.
 6. The same shape appears with a second seed.
 7. The measured tributes are the learners. Check `tracked_ids` in the code path that produced the summary, or the "Who is measured" table above.
+8. If the run was warm-started, the final numbers beat the champion it started from, not just a random network.
 
 ## Known limitations
 
-- **Small numpy networks.** The brain is a plain MLP written in numpy with one hidden layer by default. There is no GPU path and no recurrence, so the tribute has no memory beyond what the perception carries.
+- **Small numpy networks.** The brain is a plain MLP written in numpy, two hidden layers of 64 and 32 by default. There is no GPU path and no recurrence, so the tribute has no memory beyond what the perception carries.
 - **REINFORCE variance.** Returns are noisy, rewards are sparse at the end of an episode, and only 4 episodes with 6 learners feed each update. Expect jagged curves. Use validation return on fixed seeds, more episodes per epoch, or several seeds averaged before claiming a trend.
-- **Telemetry measures the voting brain too.** Sweeps and GA evaluation games track every tribute. With the default `brain_name="voting"`, part of every behaviour chart is hand-coded behaviour. Only the RL trainer restricts telemetry to its learners. For a clean comparison of a trained brain, load its genome into every tribute first.
+- **Imitation is capped by its teacher.** The student learns the voting brain's rules and its mistakes. Its validation games measure survival and wins, but the loss it minimises never sees them; a better copy is not always a better tribute.
+- **Telemetry measures the voting brain too.** Sweeps and GA evaluation games track every tribute. With the default `brain_name="voting"`, part of every behaviour chart is hand-coded behaviour. Only the RL and imitation trainers restrict telemetry to their learners. For a clean comparison of a trained brain, load its genome into every tribute first.
 - **Heatmaps are 30 by 30 bins.** On a 120-cell arena each bin covers 16 cells. Fine structure such as a single stream is blurred. Change `HEATMAP_CELLS` in `telemetry.py` if you need more, and note that the dashboard's heat series expects 30.
 - **Placements in telemetry.** The `placements` list records 0 for survivors because the hook runs before final placings are assigned. Use `wins` and the runner's `players.csv` for exact placings.

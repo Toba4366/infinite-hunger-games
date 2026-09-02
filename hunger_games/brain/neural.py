@@ -191,6 +191,24 @@ class NeuralBrain(Brain):
         # Build the move.
         return Action.move(dx, dy)
 
+    @staticmethod
+    def action_to_menu_index(action: Action) -> int:
+        """The reverse of menu_to_action: which menu item an action corresponds to (for imitation labels)."""
+        # Simple actions map straight across.
+        for index, simple in enumerate(SIMPLE_ACTIONS):
+            if action.kind is simple.kind:
+                return index
+        # Attack and flee.
+        if action.kind is ActionType.ATTACK:
+            return ATTACK_INDEX
+        if action.kind is ActionType.FLEE:
+            return FLEE_INDEX
+        # A move: find its direction; a zero move is a rest.
+        if (action.dx, action.dy) in DIRECTIONS:
+            return FIRST_MOVE_INDEX + DIRECTIONS.index((action.dx, action.dy))
+        # Anything else counts as resting.
+        return 0
+
     def describe(self) -> str:
         """A one-line summary for the dashboard."""
         # Delegate.

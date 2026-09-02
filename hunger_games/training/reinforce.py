@@ -191,12 +191,30 @@ def play_rl_episode(
     previous: dict[int, tuple] = {}
     # Whether each learner has already received a death penalty.
     dead_paid: set[int] = set()
+    # The last known distances to water and grass per learner, for the approach reward.
+    last_distances: dict[int, tuple[float, float, bool, bool]] = {}
 
     # Decision hook: record the state and the chosen index.
     def on_decision(player: Player, perception, action) -> None:
         # Only learners.
         if player.player_id not in learners:
             return
+        # Approach shaping: reward the previous action for closing the distance to what was needed.
+        pid = player.player_id
+        previous_distances = last_distances.get(pid)
+        if previous_distances is not None and rewards[pid]:
+            water_before, grass_before, was_thirsty, was_hungry = previous_distances
+            if was_thirsty and water_before != float("inf") and perception.water_distance != float("inf"):
+                rewards[pid][-1] += reward.approach * (water_before - perception.water_distance)
+            if was_hungry and grass_before != float("inf") and perception.grass_distance != float("inf"):
+                rewards[pid][-1] += reward.approach * (grass_before - perception.grass_distance)
+        # Remember this tick's distances and needs for the next comparison.
+        last_distances[pid] = (
+            perception.water_distance,
+            perception.grass_distance,
+            perception.thirst < 0.5 and not perception.in_water,
+            perception.hunger < 0.5 and perception.food_count == 0,
+        )
         # The vector and the index (decide_index stored the probabilities; the index is recovered from the action).
         vectors[player.player_id].append(perception.to_vector())
         # The chosen index.
@@ -286,8 +304,14 @@ def _run_episode_job(args: tuple) -> dict:
 class ReinforceTrainer:
     """Trains a NeuralBrain policy by REINFORCE with a learned value baseline."""
 
-    def __init__(self, config: SimulationConfig, rl: RLConfig, scenario: Scenario | None = None) -> None:
-        """Create a fresh policy and value network."""
+    def __init__(
+        self,
+        config: SimulationConfig,
+        rl: RLConfig,
+        scenario: Scenario | None = None,
+        initial_genome: np.ndarray | None = None,
+    ) -> None:
+        """Create a fresh policy and value network, or start the policy from a given genome (a warm start)."""
         # Settings.
         self.config = config
         # Learner settings.
@@ -298,6 +322,9 @@ class ReinforceTrainer:
         self.rng = np.random.default_rng(rl.seed)
         # The policy network (same architecture the NeuralBrain uses).
         self.policy = NeuralBrain(chaos=1.0, config=config.neural, rng=self.rng).network
+        # A warm start: begin from an existing policy (an imitation-pretrained one, or an earlier champion).
+        if initial_genome is not None:
+            self.policy.set_genome(np.asarray(initial_genome, dtype=float))
         # The value network: state in, one number out.
         self.value = MLP([VECTOR_SIZE, *rl.value_hidden, 1], config.neural.activation, "xavier_uniform", rng=self.rng)
         # Optimisers.
@@ -318,6 +345,12 @@ class ReinforceTrainer:
         self.best_val_return = -np.inf
 
     # ------------------------------------------------------------ episodes
+
+    @property
+    def settings(self):
+        """The trainer's own settings dataclass (every trainer exposes this name for run folders)."""
+        # The RL settings.
+        return self.rl
 
     def _learner_ids(self) -> list[int]:
         """Which tribute slots the policy drives (spread across the roster)."""
@@ -586,6 +619,11 @@ class ReinforceTrainer:
         }
         # Write.
         Path(path).write_text(json.dumps(data))
+
+    def save_champion(self, path: str | Path) -> None:
+        """Alias of save_policy, so every trainer has the same method name."""
+        # Delegate.
+        self.save_policy(path)
 
     def history_rows(self) -> list[dict]:
         """The history as JSON-friendly rows."""

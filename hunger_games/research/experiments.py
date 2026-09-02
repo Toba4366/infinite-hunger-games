@@ -58,8 +58,10 @@ def make_run_dir(base: str | Path, name: str) -> Path:
     """Create `base/<name>_<timestamp>/plots` and return the run folder."""
     # Timestamp.
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Keep the name to a single folder component, so a typed name cannot point outside `base`.
+    safe_name = Path(name).name or "run"
     # Folder.
-    folder = Path(base) / f"{name}_{stamp}"
+    folder = Path(base) / f"{safe_name}_{stamp}"
     # Make it, with the plots subfolder.
     (folder / "plots").mkdir(parents=True, exist_ok=True)
     # Done.

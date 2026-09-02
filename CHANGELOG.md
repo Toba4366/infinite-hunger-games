@@ -6,6 +6,43 @@ Each entry was written from the working session that produced it; keep it
 that way: whenever code, docs or defaults change, add a line under
 **Unreleased** and move the block to a version heading when it ships.
 
+## 0.5.0 - 2026-09-02 (instincts by imitation)
+
+Requested: neural tributes kept dying of thirst during training; instincts
+should come from pretraining a network and using it as the initialisation,
+not from dense rewards.
+
+### Added
+- `training/imitation.py`: behaviour cloning of the voting brain. Records
+  (perception, action) pairs from teacher games (teacher at chaos 0 for clean
+  labels), trains the network with cross-entropy and Adam, logs train and
+  validation loss and accuracy, plays a greedy validation game per epoch
+  (survival, win rate, telemetry, showcase), and saves a champion file.
+- Warm starts: `GeneticTrainer` and `ReinforceTrainer` accept
+  `initial_genome`; the GA seeds its population with the genome and close
+  relatives (a quarter of the mutation scale). The dashboard's Train tab has
+  an imitation method, a "start from the current champion" checkbox, and
+  accuracy and loss plots for imitation.
+- `NeuralBrain.action_to_menu_index`, the inverse of `menu_to_action`.
+- `RewardConfig.approach`, a dense reward for closing in on water or grass
+  when needed, present as a research toggle but off by default.
+- `tests/test_imitation.py`.
+
+### Changed
+- `NeuralConfig.hidden_layers` default (16,) to (64, 32): measured 64%
+  versus 80% agreement with the teacher after imitation.
+- Every trainer exposes `settings` and `save_champion`, so run folders and
+  the dashboard treat them alike.
+
+### Fixed
+- Run-folder names typed in the dashboard are reduced to a single folder
+  component before use.
+
+### Measured
+- Untrained network, 8 generations or epochs: dehydration 10 of 12 learner
+  deaths, flat fitness. After 30 imitation epochs: validation accuracy 80%,
+  validation survival 162 versus 85 ticks, dehydration 2 of 12.
+
 ## 0.4.0 - 2026-09-02 (tutorial and training feed)
 
 Requested: a way to watch the training games and see the networks evolve,

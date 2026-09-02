@@ -1,7 +1,7 @@
 # `app.py`
 
 **Source:** [hunger_games/ui/app.py](../../hunger_games/ui/app.py)
-**Depends on:** `time`, `pathlib.Path`, `dearpygui.dearpygui as dpg`, `numpy`; project modules [../brain/init.md](../brain/init.md) (`BRAIN_REGISTRY`), [../brain/initializers.md](../brain/initializers.md) (`ACTIVATIONS`, `INITIALIZER_NOTES`, `INITIALIZERS`), [../brain/neural.md](../brain/neural.md) (`MENU_NAMES`, `MENU_SIZE`, `NeuralBrain`), [../brain/voting.md](../brain/voting.md) (`GENE_NAMES`), [../config.md](../config.md) (`ArenaShape`, `LayoutName`, `NeuralConfig`), [../districts.md](../districts.md) (`DISTRICT_INDUSTRIES`, `SEXES`), [../perception.md](../perception.md) (`VECTOR_NAMES`, `VECTOR_SIZE`), [../research/experiments.md](../research/experiments.md) (`SweepConfig`), [../research/telemetry.md](../research/telemetry.md) (`NEED_BIN_LABELS`), [../resources.md](../resources.md) (`ResourceKind`, `weapon_name`), [../terrain.md](../terrain.md) (`TerrainType`), [../training/init.md](../training/init.md) (`RLConfig`, `TrainingConfig`), [canvas.md](canvas.md) (`ArenaCanvas`), [painter.md](painter.md) (`MapPainter.PRESETS`), [session.md](session.md) (`Session`), [visualizer.md](visualizer.md) (`NetworkVisualizer`)
+**Depends on:** `time`, `pathlib.Path`, `dearpygui.dearpygui as dpg`, `numpy`; project modules [../brain/init.md](../brain/init.md) (`BRAIN_REGISTRY`), [../brain/initializers.md](../brain/initializers.md) (`ACTIVATIONS`, `INITIALIZER_NOTES`, `INITIALIZERS`), [../brain/neural.md](../brain/neural.md) (`MENU_NAMES`, `MENU_SIZE`, `NeuralBrain`), [../brain/voting.md](../brain/voting.md) (`GENE_NAMES`), [../config.md](../config.md) (`ArenaShape`, `LayoutName`, `NeuralConfig`), [../districts.md](../districts.md) (`DISTRICT_INDUSTRIES`, `SEXES`), [../perception.md](../perception.md) (`VECTOR_NAMES`, `VECTOR_SIZE`), [../research/experiments.md](../research/experiments.md) (`SweepConfig`), [../research/telemetry.md](../research/telemetry.md) (`NEED_BIN_LABELS`), [../resources.md](../resources.md) (`ResourceKind`, `weapon_name`), [../terrain.md](../terrain.md) (`TerrainType`), [../training/init.md](../training/init.md) (`ImitationConfig`, `RLConfig`, `TrainingConfig`), [canvas.md](canvas.md) (`ArenaCanvas`), [painter.md](painter.md) (`MapPainter.PRESETS`), [session.md](session.md) (`Session`), [visualizer.md](visualizer.md) (`NetworkVisualizer`)
 **Used by:** [init.md](init.md) (`launch` builds a `Dashboard`), [screenshots.md](screenshots.md) (builds a `Dashboard` by hand and calls `_tutorial_action`)
 
 ## Purpose
@@ -14,7 +14,7 @@
 - **Primary window and child windows.** `dpg.set_primary_window("root", True)` makes one window fill the viewport. `dpg.child_window` is a resizable, scrollable box inside it; the three panels are child windows whose sizes `_layout` recomputes from `dpg.get_viewport_client_width()` and `..._height()` on every resize.
 - **Tags.** Any widget can have `tag="..."`. `dpg.get_value`, `dpg.set_value` and `dpg.configure_item` address it later. Every widget this file updates has a tag; they are listed per tab below. Tab bars and tabs are tagged too: `dpg.set_value("left_tabs", "tab_map")` switches the left panel to the Map tab. The tutorial and the screenshot tool use that.
 - **Callbacks.** A callback is called as `callback(sender, app_data, user_data)`, but Dear PyGui passes only as many as the function accepts, so callbacks here take `()`, `(s, a)` or `(sender, value, player_id)`. `app_data` is the new value, or a dictionary for a file dialog.
-- **Callback factories.** `_setter`, `setter`, `ga`, `rl` and `rw` return callbacks bound to one attribute name; `lambda s, a, u=speed: ...` inside a loop freezes `speed` per button. `_tip` attaches a tooltip to the widget created just before it.
+- **Callback factories.** `_setter`, `setter`, `im`, `ga`, `rl` and `rw` return callbacks bound to one attribute name; `lambda s, a, u=speed: ...` inside a loop freezes `speed` per button. `_tip` attaches a tooltip to the widget created just before it.
 - **Collapsing headers, groups, tables, plots.** `dpg.collapsing_header` folds a section. `dpg.group(tag=...)` with `show=False` hides a block; `dpg.delete_item(tag, children_only=True)` empties a group so it can be refilled. A table has columns in slot 0 and rows in slot 1. A plot holds axes; line, bar and heat series are children of the Y axis; `dpg.set_value(series, [xs, ys])` replaces the data and `dpg.fit_axis_data(axis)` rescales.
 - **Heat series.** `dpg.add_heat_series(values, rows, cols, ...)` draws a matrix as coloured cells; the plot's colormap (`dpg.bind_colormap`) maps `scale_min..scale_max` to colours. A heat series cannot change its row count after creation, so the evolution heat map is deleted and recreated each time a step is added.
 - **Handler registry and threads.** `dpg.handler_registry()` catches mouse down (fires every frame while held), release and click events that are not tied to a widget. Training and sweeps run in session threads; this file only polls each frame and never blocks.
@@ -61,7 +61,7 @@ Left and right panel widths as fractions of the window; the centre takes the res
 
 `def __init__(self) -> None`
 
-Creates `session = Session()`, `canvas = ArenaCanvas(session)`, `visualizer = NetworkVisualizer()`. Tool state: `tool = "Select"`, `brush_terrain = GRASS`, `brush_radius = 2`, `loot_kind = WEAPON`, `loot_quantity = 1`, `loot_quality = 0.8`, `drag_id = None`, `painting = False`, `auto_next = False`. Bookkeeping: `_last_time`, `_plotted_steps = -1`, `_frame = 0`. Training settings being edited: `ga = TrainingConfig()`, `rl = RLConfig()`, `method = "genetic"`.
+Creates `session = Session()`, `canvas = ArenaCanvas(session)`, `visualizer = NetworkVisualizer()`. Tool state: `tool = "Select"`, `brush_terrain = GRASS`, `brush_radius = 2`, `loot_kind = WEAPON`, `loot_quantity = 1`, `loot_quality = 0.8`, `drag_id = None`, `painting = False`, `auto_next = False`. Bookkeeping: `_last_time`, `_plotted_steps = -1`, `_frame = 0`. Training settings being edited: `ga = TrainingConfig()`, `rl = RLConfig()`, `imitation = ImitationConfig()`, and `method = "genetic"` (which of the three the Train tab uses). `brush_demo = None` is a brush ring the screenshot tool can place.
 
 #### `Dashboard.run`
 
@@ -120,7 +120,7 @@ Reads the viewport client size. `panel_height = max(400, height - 60)`; `left = 
 
 `def on_frame(self) -> None`
 
-Every frame: delta time capped at 0.25 s; `session.update(seconds)` (which first advances the training feed, then playback); auto-next (if `auto_next`, the game is over, the playhead is at the live edge, playback stopped and `auto_next_box` is ticked, start a new game and play); brush preview (`canvas.brush_preview = (x, y, brush_radius)` when the Paint terrain tool hovers a cell, else `None`); `canvas.render()`; then `_refresh_transport`, `_refresh_inspector`, `_refresh_network`, `_refresh_training`, `_refresh_research`; `_refresh_charts` every 30th frame; finally `status_text`.
+Every frame: delta time capped at 0.25 s; `session.update(seconds)` (which first advances the training feed, then playback); auto-next (if `auto_next`, the game is over, the playhead is at the live edge, playback stopped and `auto_next_box` is ticked, start a new game and play); brush preview (`canvas.brush_preview = (x, y, brush_radius)` when the Paint terrain tool hovers a cell, else `brush_demo`); `canvas.render()`; then `_refresh_transport`, `_refresh_inspector`, `_refresh_network`, `_refresh_training`, `_refresh_research`; `_refresh_charts` every 30th frame; finally `status_text`.
 
 #### `Dashboard.TUTORIAL_STEPS`
 
@@ -138,6 +138,8 @@ A class attribute: a list of `(title, text, action)` tuples, one per tutorial st
 | 7. Train and watch training | `"train"` | Genetic or reinforce; the training feed's `replay` and `live` modes. Show me starts a short evolution of voting brains |
 | 8. Research | `"research"` | Sweeps and behaviour chart exports; run folders under `results/` |
 | 9. Save and share | `"files"` | Where each file is saved; the docs folder |
+
+The step 7 text still describes two methods (genetic and reinforce). The Train tab itself offers three; see `_build_train`.
 
 #### `Dashboard._build_tutorial`
 
@@ -159,11 +161,11 @@ Performs one step with the same session and dashboard methods the real controls 
 | `"loot"` | `tool = "Place loot"` | `tab_loot` |
 | `"play"` | `tool = "Select"`, `session.new_game()`, `_set_speed(8.0)`, `session.playing = True` | `tab_play` |
 | `"network"` | `config.brain_name = "neural"`, `cfg_brain` set to `neural`, `_on_brain_all()` (every tribute becomes neural and drops any genome), `session.new_game()`, `_set_speed(4.0)`, play, select the first tribute | `tab_network` on the right, `tab_brains` on the left |
-| `"train"` | `self.ga = TrainingConfig(brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1)`, `session.feed_mode = "live"`, `feed_mode` radio set to `live`, `_on_start_training()` | `tab_train` |
+| `"train"` | `_on_method(None, "genetic")` (so `method` is genetic and the genetic group is shown), `session.feed_mode = "live"`, `feed_mode` radio set to `live`, `_plotted_steps = -1`, then `session.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1), "genetic")` directly, with no warm start | `tab_train` |
 | `"research"` | Nothing else | `tab_research` |
 | `"files"` | Nothing else | `tab_play` |
 
-Any other name does nothing. Note that `"train"` starts whichever method the Train tab's radio button currently shows: `_on_start_training` reads `self.method`, so with `reinforce` selected the new `self.ga` is ignored and a reinforce run starts from `self.rl`.
+Any other name does nothing. The `"train"` step does not touch `self.ga`, `self.rl` or `self.imitation`, and it does not read the `warm_start` checkbox: it always starts the fixed voting-brain run from a random population. It sets the method radio (tag `train_method`) to `genetic` and calls `_on_method(None, "genetic")`, so the highlight and the settings groups both switch.
 
 #### `Dashboard._setter`
 
@@ -289,8 +291,8 @@ Add: `session.add_tribute()` then select it. Remove: `session.remove_tribute(sel
 | default brain (combo over `BRAIN_REGISTRY`: voting, random, neural) | `cfg_brain` | `config.brain_name` |
 | Give this brain to every tribute | | `_on_brain_all` |
 | shape line | | text "50 inputs (the perception) -> hidden layers -> 16 outputs (the action menu)" |
-| number of hidden layers | `nn_layer_count` | int 1..6, clamped; default `len(config.neural.hidden_layers)`, which is 1; callback `_on_layer_count` |
-| nodes in hidden layer N (one field per layer) | `nn_width_0`, `nn_width_1`, ... inside the group `nn_widths_group` | int 1..512, clamped; defaults from `config.neural.hidden_layers`, so one field of 16 |
+| number of hidden layers | `nn_layer_count` | int 1..6, clamped; default `len(config.neural.hidden_layers)`, which is 2; callback `_on_layer_count` |
+| nodes in hidden layer N (one field per layer) | `nn_width_0`, `nn_width_1`, ... inside the group `nn_widths_group` | int 1..512, clamped; defaults from `config.neural.hidden_layers`, so two fields holding 64 and 32 |
 | activation | `nn_activation` | combo over `ACTIVATIONS`, default `tanh` |
 | initializer | `nn_init` | combo over `INITIALIZERS`, default `xavier_uniform`; updates the note |
 | initializer note | `nn_init_note` | `INITIALIZER_NOTES[name]` |
@@ -326,13 +328,13 @@ The callback of `nn_layer_count`. Reads the widths typed so far with `_read_widt
 
 `def _read_widths(self) -> list[int]`
 
-Collects `int(dpg.get_value(f"nn_width_{index}"))` for `index = 0, 1, 2, ...` until a tag does not exist. Returns the list, so `[32, 16]` for two fields holding 32 and 16.
+Collects `int(dpg.get_value(f"nn_width_{index}"))` for `index = 0, 1, 2, ...` until a tag does not exist. Returns the list, so `[64, 32]` for the two default fields.
 
 #### `Dashboard._on_apply_neural`
 
 `def _on_apply_neural(self) -> None`
 
-Reads the widths into a tuple and replaces `config.neural` with `NeuralConfig(hidden_layers=layers or (16,), activation=nn_activation, initializer=nn_init, init_scale=float(nn_scale), sparsity=float(nn_sparsity))`. Then builds a sample `NeuralBrain(config=..., rng=default_rng(0))` and writes "Network: " plus its `describe()` into `nn_summary`, for example `Network: 50 -> 16 -> 16, tanh, xavier_uniform, 1088 params`. Also called at build time and after loading a config.
+Reads the widths into a tuple and replaces `config.neural` with `NeuralConfig(hidden_layers=layers or (16,), activation=nn_activation, initializer=nn_init, init_scale=float(nn_scale), sparsity=float(nn_sparsity))`. Then builds a sample `NeuralBrain(config=..., rng=default_rng(0))` and writes "Network: " plus its `describe()` into `nn_summary`, for example `Network: 50 -> 64 -> 32 -> 16, tanh, xavier_uniform, 5872 params` for the defaults. Also called at build time and after loading a config.
 
 #### `Dashboard._build_play`
 
@@ -350,54 +352,73 @@ Sets `session.ticks_per_second` and the `speed_slider`.
 
 `def _build_train(self) -> None`
 
-A radio button `genetic` / `reinforce` (`_on_method`), then two groups of which one is shown.
+At the top, a horizontal radio button with the choices `imitation`, `genetic`, `reinforce` (default `self.method`, which is `genetic`; callback `_on_method`; tag `train_method`). Its tooltip describes imitation (copy the voting brain first), genetic (evolve a population of genomes; neural and voting brains) and reinforce (policy gradient with a value baseline; neural only).
 
-| Group | Control | Field | Range, default |
+Under it, the warm-start checkbox:
+
+| Control | Tag | Default | Meaning |
 | --- | --- | --- | --- |
-| `ga_group` | brain to evolve | `ga.brain_name` | `neural`, `voting`; default neural |
-| | population | `ga.population_size` | 4..480, default 48 |
-| | generations | `ga.generations` | 1..1000, default 20 |
-| | games per genome | `ga.rounds_per_generation` | 1..10, default 2 |
-| | elite fraction | `ga.elite_fraction` | 0..0.5, default 0.1 |
-| | mutation rate | `ga.mutation_rate` | 0..1, default 0.1 |
-| | mutation scale | `ga.mutation_scale` | 0.001..1, default 0.1 |
-| | crossover rate | `ga.crossover_rate` | 0..1, default 0.5 |
-| | validation games | `ga.validation_games` | 0..20, default 2 |
-| | CPU workers | `ga.workers` | 1..32, default 1 |
-| `rl_group` (hidden at start) | epochs | `rl.epochs` | 1..10000, default 30 |
-| | games per epoch | `rl.episodes_per_epoch` | 1..64, default 4 |
-| | learners per game | `rl.learners_per_game` | 1..24, default 6 |
+| start from the current champion | `warm_start` | on | Read by `_on_start_training`. Seeds the next run with the champion of the last one, or a loaded champion file (see `Session.warm_start_genome`). The tooltip recommends pretraining by imitation, keeping the box ticked, and evolving or reinforcing from that network with a small mutation scale (about 0.02) so the instincts survive |
+
+Then three groups, of which one is shown at a time. The imitation group is hidden at start and its local factory `im(name, convert)` writes `self.imitation.<name>`:
+
+| Group | Control | Field | Widget, range, default |
+| --- | --- | --- | --- |
+| `im_group` (hidden at start) | teacher brain | `imitation.teacher` | combo with the single choice `voting`; default `voting` |
+| | demonstration games | `imitation.demonstration_games` | int 1..200, clamped, default 12 |
+| | epochs | `imitation.epochs` | int 1..1000, clamped, default 30 |
+| | batch size | `imitation.batch_size` | int 8..4096, clamped, default 256 |
+| | learning rate | `imitation.learning_rate` | float, format `%.5f`, default 0.001 |
+| | validation games | `imitation.validation_games` | int 0..20, clamped, default 1 |
+| | CPU workers | `imitation.workers` | int 1..32, clamped, default 1 |
+| `ga_group` (shown at start) | brain to evolve | `ga.brain_name` | combo `neural`, `voting`; default neural |
+| | population | `ga.population_size` | int 4..480, default 48 |
+| | generations | `ga.generations` | int 1..1000, default 20 |
+| | games per genome | `ga.rounds_per_generation` | int 1..10, default 2 |
+| | elite fraction | `ga.elite_fraction` | float 0..0.5, default 0.1 |
+| | mutation rate | `ga.mutation_rate` | float 0..1, default 0.1 |
+| | mutation scale | `ga.mutation_scale` | float 0.001..1, default 0.1 |
+| | crossover rate | `ga.crossover_rate` | float 0..1, default 0.5 |
+| | validation games | `ga.validation_games` | int 0..20, default 2 |
+| | CPU workers | `ga.workers` | int 1..32, default 1 |
+| `rl_group` (hidden at start) | epochs | `rl.epochs` | int 1..10000, default 30 |
+| | games per epoch | `rl.episodes_per_epoch` | int 1..64, default 4 |
+| | learners per game | `rl.learners_per_game` | int 1..24, default 6 |
 | | learning rate | `rl.learning_rate` | float, default 0.001 |
 | | value learning rate | `rl.value_learning_rate` | float, default 0.003 |
-| | entropy bonus | `rl.entropy_bonus` | 0..0.2, default 0.01 |
-| | validation games | `rl.validation_games` | 0..20, default 2 |
-| | CPU workers | `rl.workers` | 1..32, default 1 |
-| Reward function header (inside `rl_group`) | per tick alive | `config.reward.survive_tick` | 0..0.1, default 0.01 |
-| | win | `reward.win` | 0..20, default 5 |
-| | death | `reward.death` | -20..0, default -3 |
-| | kill | `reward.kill` | 0..10, default 1 |
-| | per health lost | `reward.damage_taken` | -10..0, default -2 |
-| | per need restored | `reward.need_gain` | 0..5, default 0.5 |
-| | placement | `reward.placement` | 0..10, default 2 |
-| | discount | `reward.discount` | 0.8..1, default 0.98 |
+| | entropy bonus | `rl.entropy_bonus` | float 0..0.2, default 0.01 |
+| | validation games | `rl.validation_games` | int 0..20, default 2 |
+| | CPU workers | `rl.workers` | int 1..32, default 1 |
+| Reward function header (inside `rl_group`) | per tick alive | `config.reward.survive_tick` | float 0..0.1, default 0.01 |
+| | win | `reward.win` | float 0..20, default 5 |
+| | death | `reward.death` | float -20..0, default -3 |
+| | kill | `reward.kill` | float 0..10, default 1 |
+| | per health lost | `reward.damage_taken` | float -10..0, default -2 |
+| | per need restored | `reward.need_gain` | float 0..5, default 0.5 |
+| | placement | `reward.placement` | float 0..10, default 2 |
+| | discount | `reward.discount` | float 0.8..1, default 0.98 |
+
+The imitation controls do not expose every `ImitationConfig` field: `teacher_chaos` (0.0), `validation_fraction` (0.2), `validation_seed` (90000), `learners_per_game` (6), `seed` and `record_showcase` keep their defaults. The Reward function header has no slider for `reward.approach`, the dense approach reward, which stays at its default of 0.0 from the dashboard.
 
 Below the groups: "Start training" (`train_start`) and "Stop after this step"; progress bar `train_progress`; summary `train_summary`; the training feed; four plots; champion buttons "Champion to all", "Champion to selected", "Watch champion"; the run name field `run_name` (default `run`) with "Save run folder"; and "Save champion" / "Load champion into all" (`.json`).
 
 The training feed is a horizontal group: the text "Training feed" and a radio button tagged `feed_mode` over `Session.FEED_MODES` (`off`, `replay`, `live`), default `session.feed_mode` (which starts as `off`). Its callback sets `session.feed_mode`. The tooltip explains: `replay` replays one real evaluation game from every step (the population playing itself); `live` gives the newest champion to the learner slots and plays a fresh game live so the Network tab shows real activations; the next step is shown when the current game ends. The feed itself is driven by `Session._advance_feed` (see [session.md](session.md)).
 
-| Plot | Tag | Axes | Series |
+| Plot | Tag | Axes | Series (labels at build time) |
 | --- | --- | --- | --- |
-| Performance | `perf_plot` | `perf_x`, `perf_y` | lines `perf_train`, `perf_val`, `perf_mean` |
-| Stability | `stab_plot` | `stab_x`, `stab_y` | lines `stab_ploss`, `stab_vloss`, `stab_entropy` |
+| Performance | `perf_plot` | `perf_x`, `perf_y` | lines `perf_train` "training", `perf_val` "validation", `perf_mean` "population mean" |
+| Stability | `stab_plot` | `stab_x`, `stab_y` | lines `stab_ploss` "policy loss", `stab_vloss` "value loss", `stab_entropy` "entropy" |
 | Time per step (s) | `time_plot` | `time_x`, `time_y` | bars `time_bars` |
 | Champion genes | `gene_plot` | `gene_x`, `gene_y` | bars `gene_same`, `gene_changed` |
+
+The series labels are renamed per method by `_refresh_training`.
 
 #### `Dashboard._on_method`, `_on_start_training`, `_on_champion_selected`, `_on_watch_champion`
 
 | Method | What it does |
 | --- | --- |
-| `_on_method(sender, value)` | Stores `method` and shows `ga_group` or `rl_group` |
-| `_on_start_training()` | Resets `_plotted_steps`, then `session.start_training(TrainingConfig(**vars(self.ga)), "genetic")` or `session.start_training(RLConfig(**vars(self.rl)), "reinforce")` |
+| `_on_method(sender, value)` | Stores `method`, then shows `im_group` when the value is `imitation`, `ga_group` when `genetic`, `rl_group` when `reinforce`, hiding the other two |
+| `_on_start_training()` | Resets `_plotted_steps`, reads `warm = bool(dpg.get_value("warm_start"))`, then calls `session.start_training(TrainingConfig(**vars(self.ga)), "genetic", warm)`, `session.start_training(RLConfig(**vars(self.rl)), "reinforce", warm)` or `session.start_training(ImitationConfig(**vars(self.imitation)), "imitation", warm)` by `method` |
 | `_on_champion_selected()` | `session.give_champion([selected_id])` and rebuild the table |
 | `_on_watch_champion()` | `give_champion()` to everyone (status "No champion yet: train first" if it returns 0), rebuild the table, `new_game()`, speed 8, play |
 
@@ -405,16 +426,28 @@ The training feed is a horizontal group: the text "Training feed" and a radio bu
 
 `def _refresh_training(self) -> None`
 
-Each frame: the progress bar shows games done in the current step with overlay "step N: done/total games" while running or "N steps done" after; `train_start` is disabled while running. The plots are updated only when `training_rows()` grew.
+Each frame: the progress bar shows games done in the current step with overlay "step N: done/total games" while running or "N steps done" after; `train_start` is disabled while running. The plots are updated only when `training_rows()` grew. The x axis is the row's `generation` for genetic and `epoch` for the other two methods. Then each method fills the Performance and Stability series and relabels them:
 
-| Plot | Genetic | Reinforce |
-| --- | --- | --- |
-| Performance | best fitness, validation fitness, population mean by generation | training return, validation return, win rate by epoch |
-| Stability | action entropy from each generation's telemetry (losses empty) | policy loss, value loss, policy entropy |
-| Time per step | seconds per generation | seconds per epoch |
-| Champion genes | latest champion's values, gold where changed since the previous step; first 400 genes; gene names on the axis for the voting brain | same, from the latest epoch's policy |
+| Plot | Imitation | Genetic | Reinforce |
+| --- | --- | --- | --- |
+| Performance `perf_train` | `train_accuracy`, "training accuracy" | `best_fitness`, "best fitness" | `train_return`, "training return" |
+| Performance `perf_val` | `val_accuracy`, "validation accuracy" | `val_fitness`, "validation fitness" | `val_return`, "validation return" |
+| Performance `perf_mean` | `val_win_rate`, "validation win rate" | `mean_fitness` (label stays "population mean") | `win_rate`, "win rate" |
+| Stability `stab_ploss` | `train_loss`, "training loss" | empty | `policy_loss`, "policy loss" |
+| Stability `stab_vloss` | `val_loss`, "validation loss" | empty | `value_loss`, "value loss" |
+| Stability `stab_entropy` | `val_survival / 100`, "validation survival (x100 ticks)" | telemetry `entropy` of each generation's games, "action entropy" | `entropy`, "entropy" |
+| Time per step | seconds per epoch | seconds per generation | seconds per epoch |
+| Champion genes | the student network after the latest epoch | the latest generation's champion | the policy after the latest epoch |
 
-After the timing bars it calls `_refresh_evolution()` so the Network tab's evolution plots grow with the same step. The summary line reads, for genetic, "N generation(s), Ts total. Best fitness x (gen g), validation y." and for reinforce "N epoch(s), Ts total. Train return x, validation y, survival t ticks, win rate w, entropy e."
+The imitation survival line is divided by 100 so it shares the axis with the two losses; a value of 3 on the plot means 300 ticks. The gene bars show gold where a gene changed since the previous step, the first 400 genes at most, and gene names on the axis for the voting brain's eight genes.
+
+After the timing bars it calls `_refresh_evolution()` so the Network tab's evolution plots grow with the same step. The summary line reads:
+
+| Method | `train_summary` |
+| --- | --- |
+| Imitation | "N epoch(s), Ts total. Validation accuracy 80%, loss 0.612, survival 410 ticks, win rate 0.00. Keep 'start from the current champion' ticked and evolve or reinforce from here." |
+| Genetic | "N generation(s), Ts total. Best fitness x (gen g), validation y." |
+| Reinforce | "N epoch(s), Ts total. Train return x, validation y, survival t ticks, win rate w, entropy e." |
 
 #### `Dashboard._build_research`
 
@@ -432,7 +465,9 @@ After the timing bars it calls `_refresh_evolution()` so the Network tab's evolu
 | Charts of the games you have watched | folder | `export_folder` | `output/watched` |
 | | Export behaviour charts | | `session.export_behaviour_plots(folder)` |
 | | Forget watched games | | clears `watched_summaries` |
-| Answers a reviewer will ask for | text | | method, rewards, observation, tooling |
+| Answers a reviewer will ask for | text | | "Method: genetic algorithm (neuroevolution) or REINFORCE with a value baseline, chosen on the Train tab. Rewards: the Reward function section there. Observation: a 50-value vector (Brains tab lists it), not a grid. Dashboard: custom, Dear PyGui; charts by matplotlib." |
+
+The reviewer text is a fixed string and does not mention the imitation method. The written answer that does is in [../research/README.md](../research/README.md).
 
 #### `Dashboard._on_start_sweep`
 
@@ -489,7 +524,7 @@ Called from `_refresh_training` whenever a new step exists. Takes `session.netwo
 
 `def _refresh_network(self) -> None`
 
-`visualizer.render(session.network_snapshot(selected_id), [50, *hidden_layers, 16])`. Caption: "Live: name. Chosen: action. Red = positive activation, blue = negative." or "Architecture: 50 -> 16 -> 16 (tanh, xavier_uniform)."
+`visualizer.render(session.network_snapshot(selected_id), [50, *hidden_layers, 16])`. Caption: "Live: name. Chosen: action. Red = positive activation, blue = negative." or, with the defaults, "Architecture: 50 -> 64 -> 32 -> 16 (tanh, xavier_uniform)."
 
 #### `Dashboard._build_charts`
 
@@ -532,8 +567,8 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 | `_save_replay` | `session.save_replay(path)` |
 | `_load_replay` | `session.load_replay(path)` and rebuild the table |
 | `_export_gif` | `session.export_gif(path, step=gif_step)` |
-| `_save_champion` | `session.save_champion(path)` |
-| `_load_champion` | `session.load_champion_into(path)` for everyone, then rebuild the table |
+| `_save_champion` | `session.save_champion(path)`, which works for all three trainers |
+| `_load_champion` | `session.load_champion_into(path)` for everyone, then rebuild the table. A loaded neural champion is also what a warm start picks up when no trainer exists yet |
 
 ### `launch`
 
@@ -552,7 +587,7 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 | Tributes | `podium_preset`, `roster_table`, `editor_header`, `ed_name`, `ed_district`, `ed_sex`, `ed_score`, `ed_survival`, `ed_brain`, `ed_weapon`, `ed_food`, `ed_medicine`, `ed_favor`, `ed_thirst`, `ed_hunger`, `ed_health` |
 | Brains | `cfg_brain`, `nn_layer_count`, `nn_widths_group`, `nn_width_0` ... `nn_width_5`, `nn_activation`, `nn_init`, `nn_init_note`, `nn_scale`, `nn_sparsity`, `nn_summary` |
 | Play | `auto_next_box`, `gif_step` |
-| Train | `ga_group`, `rl_group`, `train_start`, `train_progress`, `train_summary`, `feed_mode`, `perf_plot`, `perf_x`, `perf_y`, `perf_train`, `perf_val`, `perf_mean`, `stab_plot`, `stab_x`, `stab_y`, `stab_ploss`, `stab_vloss`, `stab_entropy`, `time_plot`, `time_x`, `time_y`, `time_bars`, `gene_plot`, `gene_x`, `gene_y`, `gene_same`, `gene_changed`, `run_name` |
+| Train | `warm_start`, `im_group`, `ga_group`, `rl_group`, `train_start`, `train_progress`, `train_summary`, `feed_mode`, `perf_plot`, `perf_x`, `perf_y`, `perf_train`, `perf_val`, `perf_mean`, `stab_plot`, `stab_x`, `stab_y`, `stab_ploss`, `stab_vloss`, `stab_entropy`, `time_plot`, `time_x`, `time_y`, `time_bars`, `gene_plot`, `gene_x`, `gene_y`, `gene_same`, `gene_changed`, `run_name` |
 | Research | `sweep_param`, `sweep_values`, `sweep_games`, `sweep_workers`, `sweep_telemetry`, `sweep_progress`, `sweep_results`, `export_folder` |
 | Transport | `play_button`, `speed_slider`, `playhead`, `headline` |
 | Inspector | `insp_title`, `insp_facts`, `insp_thirst`, `insp_hunger`, `insp_health`, `insp_more`, `insp_log` |
@@ -560,15 +595,21 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 | Charts | `chart_actions`, `chart_actions_x`, `chart_actions_y`, `chart_actions_bars`, `chart_instinct`, `chart_instinct_x`, `chart_instinct_y`, `chart_drink`, `chart_eat`, `chart_flee`, `chart_heat`, `chart_heat_x`, `chart_heat_y`, `chart_heat_series` |
 | Other files | `arena_canvas`, `arena_texture_<n>` ([canvas.md](canvas.md)); `network_canvas` ([visualizer.md](visualizer.md)) |
 
+The individual training settings inside `im_group`, `ga_group` and `rl_group`, and the reward sliders have no tags; the method radio is tagged `train_method`.
+
 ## How to use it / experiment
 
 **Add a config slider.** Inside `_build_setup`, add `dpg.add_slider_float(label=..., default_value=c.<field>, min_value=..., max_value=..., callback=self._setter("<field>"), tag="cfg_<field>")`, and add the tag to the list in `_load_config` so loading a file refreshes it. Pass `react="size"` if the map must be regenerated.
+
+**Add an imitation setting.** Inside the `im_group` block, add a widget with `callback=im("<field>")`, for example `dpg.add_slider_float(label="teacher chaos", default_value=self.imitation.teacher_chaos, min_value=0.0, max_value=1.0, callback=im("teacher_chaos"))`. `_on_start_training` copies every field of `self.imitation` into the `ImitationConfig` it starts, so nothing else changes.
 
 **Add a tutorial step.** Append `("10. My step", "What to do.", "mystep")` to `TUTORIAL_STEPS` and add an `elif name == "mystep":` branch to `_tutorial_action` that calls session methods and ends with `dpg.set_value("left_tabs", "tab_...")`. To take a picture of it, add a row to `SHOTS` in [screenshots.md](screenshots.md).
 
 **Switch tabs from code.** `dpg.set_value("left_tabs", "tab_train")` and `dpg.set_value("right_tabs", "tab_network")`. Reading `dpg.get_value("left_tabs")` gives the tag of the open tab.
 
 **Set an architecture from code.** `dpg.set_value("nn_layer_count", 2)` does not fire the callback, so call `self._rebuild_width_fields([32, 16])` and then `self._on_apply_neural()`, which is what `_load_config` does.
+
+**Start a warm-started run from code.** `dpg.set_value("warm_start", True)`, `self._on_method(None, "genetic")`, `self.ga.mutation_scale = 0.02`, then `self._on_start_training()`. The session decides whether a genome is available (see `Session.warm_start_genome`).
 
 **Add a mouse tool.** Append a name to `TOOLS`, then handle it in `_on_mouse_down` or `_on_mouse_click` with `self.canvas.mouse_cell()` and a session method.
 
@@ -579,13 +620,16 @@ Each takes `(self, path: str)` and is handed to `_file_dialog`.
 - Painting, loot and dragging are ignored while a game is loaded (`session.game is not None`). Press Load replay or restart the dashboard to clear a game; a loaded replay sets `game` to `None`, so editing works again, but the map shown is the replay's. The training feed in `replay` mode loads recordings the same way.
 - `cfg_size` and `cfg_players` apply on Enter, not on every keystroke.
 - The "nodes in hidden layer N" fields have no callbacks. Typing a width changes nothing until "Apply network settings" is pressed; the caption on the Network tab and any new game keep the old architecture until then.
-- Changing "number of hidden layers" rebuilds the width fields at once, but still through `_read_widths`, so widths already typed are kept. Shrinking drops layers from the end.
-- `_tutorial_action("train")` starts a fixed short evolution (`TrainingConfig(brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1)`) without touching `self.ga`, switches the Train tab to the genetic group and sets the feed to live; the Train tab widgets keep showing your own settings.
-- `_tutorial_action("train")` starts whichever method the Train tab radio shows. With `reinforce` selected it starts a reinforce run and ignores the voting settings it just made.
-- `_tutorial_action("network")` calls `_on_brain_all`, which drops every trained genome in the roster.
+- Changing "number of hidden layers" rebuilds the width fields at once, but still through `_read_widths`, so widths already typed are kept. Shrinking drops layers from the end. New layers start at 16 nodes even though the defaults are 64 and 32.
+- `_tutorial_action("train")` starts a fixed short evolution (`TrainingConfig(brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1)`) without touching `self.ga`, sets the method radio to `genetic`, calls `_on_method(None, "genetic")` and sets the feed to live. The Train tab's settings widgets keep showing your own values.
+- `_tutorial_action("train")` never warm-starts, whatever the `warm_start` checkbox says, because it calls `session.start_training` without the third argument.
+- `_tutorial_action("network")` calls `_on_brain_all`, which drops every trained genome in the roster. After that, a warm start has nothing to pick up from the roster (a trainer's champion still counts).
+- The `warm_start` checkbox is on by default and is read only when Start training is pressed. A second run therefore starts from the first run's champion unless you untick it. For the genetic method with `brain to evolve` set to `voting`, the session drops the warm start silently (see [session.md](session.md)).
+- The imitation Stability plot draws `val_survival / 100` on the loss axis; read the summary line for the survival in ticks.
 - `_setter` writes the config field even while a game is playing; the running game keeps its own config copy, so changes apply to the next New game.
 - Load replay does not refresh the Setup widgets even though the session adopted the recording's config; Load config does. The training feed's `replay` mode adopts a config the same way.
-- The Reward function sliders write `session.config.reward` directly, not a copy, and the sliders are not refreshed by Load config.
+- The Reward function sliders write `session.config.reward` directly, not a copy, and the sliders are not refreshed by Load config. There is no slider for `reward.approach`; edit the config file to turn the dense approach reward on.
+- The Research tab's reviewer text names genetic and REINFORCE only; it was not updated for imitation.
 - Training plots, including the evolution plots on the Network tab, are updated only when the row count changes, so a slow generation shows a frozen plot with a moving progress bar. Because they update from `_refresh_training`, they fill in even while the Network tab is not open.
 - `evo_heat_series` is deleted and recreated on every new step, and the colour scale is recomputed from the largest absolute gene so far, so colours can shift between steps. Only the first 200 genes are drawn.
 - `_refresh_charts` runs every 30 frames and is skipped entirely until a game has produced telemetry.

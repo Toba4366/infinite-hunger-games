@@ -22,13 +22,13 @@ from hunger_games.research.plots import training_run_plots
 
 
 def save_run(trainer, method: str, name: str, results_dir: str | Path = "results") -> Path:
-    """Write config, history, champion and plots for a GeneticTrainer or ReinforceTrainer."""
+    """Write config, history, champion and plots for a GeneticTrainer, ReinforceTrainer or ImitationTrainer."""
     # Folder.
     folder = make_run_dir(results_dir, name)
     # The trainer's own settings dataclass.
     from dataclasses import asdict
 
-    trainer_config = asdict(trainer.training) if hasattr(trainer, "training") else asdict(trainer.rl)
+    trainer_config = asdict(trainer.settings)
     # Config.
     (folder / "config.json").write_text(
         json.dumps(
@@ -38,12 +38,9 @@ def save_run(trainer, method: str, name: str, results_dir: str | Path = "results
     # History.
     rows = trainer.history_rows()
     (folder / "history.json").write_text(json.dumps(rows, indent=2, default=str))
-    # Champion.
-    if method == "genetic":
-        if trainer.champion is not None:
-            trainer.save_champion(folder / "champion.json")
-    else:
-        trainer.save_policy(folder / "champion.json")
+    # Champion (every trainer writes the same file shape).
+    if trainer.champion is not None:
+        trainer.save_champion(folder / "champion.json")
     # Telemetry per step.
     summaries = [stats.telemetry for stats in trainer.history if stats.telemetry]
     # Plots.

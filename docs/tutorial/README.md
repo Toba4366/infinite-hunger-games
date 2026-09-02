@@ -86,12 +86,21 @@ highlighted in gold. The picture updates every tick.
 
 ## 7. Train, and watch training happen
 
-The **Train** tab has two methods. **genetic** evolves a population of
-genomes by playing them against each other (neural or voting brains).
-**reinforce** trains the neural brain by policy gradient with a value
-baseline, using the reward function shown on the same tab. Both log every
-step to the Performance, Stability and Time plots, and the Champion genes
-plot highlights in gold the genes that changed since the previous step.
+The **Train** tab has three methods. Start with **imitation** for a neural
+brain: a fresh network picks "drink" one time in sixteen even when standing
+in water, so it dies of thirst on day three before any reward can teach it
+otherwise. Imitation plays games with the voting brain, records every
+decision, and trains the network to copy them, which gives it working
+instincts (measured: dehydration falls from ten of twelve learner deaths to
+two, and the student matches the teacher 80 percent of the time with the
+default 64 by 32 network). Then keep **start from the current champion**
+ticked and pick **genetic**, which evolves a population of genomes by
+playing them against each other (use a small mutation scale, about 0.02, so
+the instincts survive), or **reinforce**, which trains by policy gradient
+with a value baseline using the reward function shown on the same tab. Every
+method logs each step to the Performance, Stability and Time plots, and the
+Champion genes plot highlights in gold the genes that changed since the
+previous step.
 
 The **training feed** is how you watch training. Set it to **replay** and
 after every step the arena replays one real evaluation game from that step.

@@ -2,7 +2,7 @@
 
 **Source:** [hunger_games/config.py](../hunger_games/config.py)
 **Depends on:** the standard library only (`dataclasses.dataclass`, `dataclasses.field`, `enum.Enum`). Inside `to_dict_raw` and `to_dict` it imports `dataclasses.MISSING`, `fields` and `asdict` lazily.
-**Used by:** almost everything. [arena.py](arena.md) (`ArenaShape`, `SimulationConfig`), [terrain.py](terrain.md) (`TerrainConfig`), [resources.py](resources.md) (`LayoutName`), [sponsors.py](sponsors.md), [gamemaker.py](gamemaker.md), [game.py](game.md), [runner.py](runner.md), [recorder.py](recorder.md), [init.md](init.md), [main.md](main.md), [brain/init.md](brain/init.md) and [brain/neural.md](brain/neural.md) (`NeuralConfig`), `research/experiments.py`, [training/genetic.md](training/genetic.md) (`NeuralConfig`, `SimulationConfig`), `training/reinforce.py` (reads `config.reward`), `ui/app.py`, `ui/session.py`, `ui/painter.py`, the three `experiments/run_*.py` scripts, and every test file.
+**Used by:** almost everything. [arena.py](arena.md) (`ArenaShape`, `SimulationConfig`), [terrain.py](terrain.md) (`TerrainConfig`), [resources.py](resources.md) (`LayoutName`), [sponsors.py](sponsors.md), [gamemaker.py](gamemaker.md), [game.py](game.md), [runner.py](runner.md), [recorder.py](recorder.md), [init.md](init.md), [main.md](main.md), [brain/init.md](brain/init.md) and [brain/neural.md](brain/neural.md) (`NeuralConfig`), `research/experiments.py`, [training/genetic.md](training/genetic.md) (`NeuralConfig`, `SimulationConfig`), [training/reinforce.md](training/reinforce.md) (reads `config.reward`), [training/imitation.md](training/imitation.md) (reads `config.neural` and overrides `chaos` for demonstrations), `ui/app.py`, `ui/session.py`, `ui/painter.py`, the three `experiments/run_*.py` scripts, and every test file.
 
 ## Purpose
 
@@ -21,6 +21,8 @@ There are two enums (fixed multiple-choice settings), four small nested dataclas
 **Properties.** `@property` turns a method into something you read like an attribute: `config.ticks_per_game`, not `config.ticks_per_game()`. The three properties here derive numbers from fields so nobody has to repeat the arithmetic.
 
 **Pickling.** The dashboard and the multi-core runner send configs to worker processes by pickling them. A config saved by an older version of this file may be missing fields that were added later. `to_dict_raw` guards against that.
+
+**Measured defaults.** Some defaults were chosen by running the simulator and counting, not by taste. The comments in the source say which, and this page repeats the numbers.
 
 ## Walkthrough
 
@@ -84,11 +86,13 @@ class NeuralConfig:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `hidden_layers` | `(16,)` | Width of each hidden layer in order. `(32, 16)` is two layers. |
+| `hidden_layers` | `(64, 32)` | Width of each hidden layer in order. `(64, 32)` is two layers; `(16,)` is one. |
 | `activation` | `"tanh"` | Squashing function: `tanh`, `relu`, `leaky_relu`, `sigmoid` or `selu`. |
 | `initializer` | `"xavier_uniform"` | How starting weights are drawn (see [brain/initializers.md](brain/initializers.md)). |
 | `init_scale` | `0.05` | Constant or spread for the constant, uniform and normal initializers. |
 | `sparsity` | `0.1` | Fraction of non-zero weights for the sparse initializer. |
+
+Why `hidden_layers` is `(64, 32)`: measured with imitation pretraining ([training/imitation.md](training/imitation.md)), a `(64, 32)` network copies the voting brain 80 percent of the time, where a single 16-neuron layer manages 64 percent. The cost is size: 5872 parameters instead of 1088, which makes the genetic algorithm's search space bigger and champion files larger. With 50 inputs and 16 outputs the parameter count is the sum over layers of `n_in * n_out + n_out`.
 
 Read by [brain/neural.md](brain/neural.md).
 
@@ -99,7 +103,7 @@ Read by [brain/neural.md](brain/neural.md).
 class RewardConfig:
 ```
 
-The per-tick score a reinforcement-learning tribute receives. Only `training/reinforce.py` reads it. The genetic algorithm ignores it and scores whole games by placing.
+The per-tick score a reinforcement-learning tribute receives. Only `training/reinforce.py` reads it. The genetic algorithm ignores it and scores whole games by placing; the imitation trainer ignores it and copies a teacher.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -109,10 +113,13 @@ The per-tick score a reinforcement-learning tribute receives. Only `training/rei
 | `kill` | `1.0` | Bonus per elimination. |
 | `damage_taken` | `-2.0` | Penalty per point of health lost. A full bar lost costs this much. |
 | `need_gain` | `0.5` | Bonus per point of thirst or hunger restored while that bar was below half. |
+| `approach` | `0.0` | Bonus per cell moved closer to water while thirsty (below half), or to grass while hungry with no food. A dense "shaping" reward, off by default. |
 | `placement` | `2.0` | End-of-game bonus scaled by placing: this much for first, nothing for last. |
 | `discount` | `0.98` | How much a reward one tick later is worth compared to now. |
 
 Design reasoning: the small `survive_tick` gives a constant pull toward staying alive, the large `win` and `death` values anchor the ends, and `need_gain` only pays out below half a bar so drinking when already full is not rewarded.
+
+Why `approach` is `0.0`: a fresh network dies of thirst before it ever drinks, so it never sees the `need_gain` reward, and a shaping term that pays for walking toward water was one way to fix that. The preferred way is to pretrain the network by imitation ([training/imitation.md](training/imitation.md)) and warm-start the trainer from it. That gives the network the whole of the voting brain's instincts, not just "walk to water", and leaves the reward describing what we actually want. Set `approach` above zero only to compare the two approaches. The bookkeeping in `play_rl_episode` runs either way; at `0.0` it adds nothing.
 
 ### `SimulationConfig`
 
@@ -174,7 +181,7 @@ def ticks_per_game(self) -> int
 def thirst_per_tick(self) -> float
 ```
 
-`1.0 / (thirst_days * ticks_per_day)`. With defaults, 1/72 of the bar per tick, so a full bar lasts exactly three days.
+`1.0 / (thirst_days * ticks_per_day)`. With defaults, 1/72 of the bar per tick, so a full bar lasts exactly three days. This is the number behind the "dies of thirst on day three" problem that imitation pretraining exists to solve.
 
 ### `SimulationConfig.hunger_per_tick`
 
@@ -199,6 +206,8 @@ from hunger_games.config import SimulationConfig
 base = SimulationConfig(seed=7)
 faster = SimulationConfig(**{**base.to_dict_raw(), "max_days": 10})
 ```
+
+Every trainer uses it this way to give each game its own seed, and the imitation trainer also overrides `chaos` for the teacher's demonstration games.
 
 It tolerates old pickles. For each declared field it checks `hasattr(self, name)`. If an older config lacks the field, it falls back to the field's default, or calls the default factory. This is why a dashboard launched before a field was added no longer crashes its worker processes.
 
@@ -225,7 +234,7 @@ from hunger_games.config import SimulationConfig
 
 text = json.dumps(SimulationConfig(max_days=12).to_dict())
 again = SimulationConfig.from_dict(json.loads(text))
-assert again.max_days == 12 and again.neural.hidden_layers == (16,)
+assert again.max_days == 12 and again.neural.hidden_layers == (64, 32)
 ```
 
 ## How to use it / experiment
@@ -246,7 +255,8 @@ Things worth trying:
 - Set `gamemaker_enabled=False` and `endgame_instinct=True` to see whether the instinct alone ends games.
 - Set `cannon_and_sky=False` to hide the field from the tributes. The four field slots of the perception vector become zeros (and `my_rank` 0.5).
 - Shrink `intervention_days` to make the circle bite faster, or raise `quiet_days_before_intervention` to give tributes more time.
-- Change `reward` and retrain with `experiments/run_rl.py` to see what behaviour a different reward buys.
+- Change `reward` and retrain with `experiments/run_rl.py` to see what behaviour a different reward buys. Try `RewardConfig(approach=0.05)` against a warm start from imitation to see which gets a policy to water sooner.
+- Compare `NeuralConfig(hidden_layers=(16,))` with the default under imitation pretraining and watch `val_accuracy` in the run folder.
 
 Sweeps over any field, including nested ones written as `"terrain.water_threshold"`, are handled by `research/experiments.py`.
 
@@ -255,6 +265,7 @@ Sweeps over any field, including nested ones written as `"terrain.water_threshol
 - The command line in [main.md](main.md) exposes `gamemaker_enabled` as the flag pair `--gamemaker` / `--no-gamemaker`, defaulting to the config value (on). Pass `--no-gamemaker` to test a design with no intervention.
 - `to_dict_raw` is shallow. The copy shares its `noise`, `terrain`, `neural` and `reward` objects with the original. Mutating `copy.neural.hidden_layers` would affect both (though tuples cannot be mutated, `activation` can be reassigned).
 - `from_dict` requires every key it does not default to be present with the right name; extra keys raise `TypeError` from the generated `__init__`.
+- A saved genome only fits the `hidden_layers` it was trained with. Champion files made before the default changed from `(16,)` to `(64, 32)` hold 1088 numbers and will not load into a default brain; `GeneticTrainer.load_champion` returns the matching `neural` config so you can build the right one.
 - `max_days` is a strict cutoff. A game that reaches it ends in a draw, with every survivor sharing a placing.
 - `seed=None` means a new random seed per `Game`. To reproduce a batch, set a seed; `Game` adds its `game_id` to it so each game in the batch still differs.
 - `start_*_min` values above 1.0 are clamped by `Game._start_value` (`min(minimum, 1.0)`), so they cannot make bars start above full.

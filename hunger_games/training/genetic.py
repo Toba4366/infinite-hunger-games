@@ -226,8 +226,14 @@ def _run_validation_job(args: tuple) -> list[tuple[int, int, float]]:
 class GeneticTrainer:
     """Evolves a population of genomes by playing them against each other."""
 
-    def __init__(self, config: SimulationConfig, training: TrainingConfig, scenario: Scenario | None = None) -> None:
-        """Create a random starting population."""
+    def __init__(
+        self,
+        config: SimulationConfig,
+        training: TrainingConfig,
+        scenario: Scenario | None = None,
+        initial_genome: np.ndarray | None = None,
+    ) -> None:
+        """Create a random starting population, or one seeded from a genome (a warm start)."""
         # The game settings.
         self.config = config
         # The algorithm settings.
@@ -243,11 +249,20 @@ class GeneticTrainer:
         # A brain with nothing to tune cannot be trained.
         if self.genome_size == 0:
             raise ValueError(f"The '{training.brain_name}' brain has no genome to train")
-        # Fresh random genomes, each from a freshly initialised brain.
-        self.population = [
-            create_brain(training.brain_name, config.chaos, self.rng, config.neural).genome()
-            for _ in range(training.population_size)
-        ]
+        # Fresh random genomes, each from a freshly initialised brain...
+        if initial_genome is None:
+            self.population = [
+                create_brain(training.brain_name, config.chaos, self.rng, config.neural).genome()
+                for _ in range(training.population_size)
+            ]
+        # ...or a warm start: the given genome plus close relatives of it. The spread is a quarter of the
+        # mutation scale because a trained network's weights are small and full-size noise erases its instincts.
+        else:
+            seed_genome = np.asarray(initial_genome, dtype=float)
+            self.population = [seed_genome.copy()] + [
+                seed_genome + self.rng.normal(0.0, 0.25 * training.mutation_scale, seed_genome.size)
+                for _ in range(training.population_size - 1)
+            ]
         # Fitness of the current population (filled by evaluate).
         self.fitness = np.zeros(training.population_size)
         # Stats per generation.
@@ -262,6 +277,12 @@ class GeneticTrainer:
         self._last_telemetry: list[dict] = []
         # The recording made by the last evaluate(), if any.
         self._last_showcase: Recording | None = None
+
+    @property
+    def settings(self):
+        """The trainer's own settings dataclass (every trainer exposes this name for run folders)."""
+        # The GA settings.
+        return self.training
 
     # ------------------------------------------------------------ evaluate
 

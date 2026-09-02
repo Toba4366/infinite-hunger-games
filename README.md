@@ -33,7 +33,7 @@ proving what they learned.
 
 ```bash
 pip install -r requirements.txt      # numpy, matplotlib, pandas, pillow, dearpygui, pytest
-python -m pytest tests               # 47 tests, about fifteen seconds
+python -m pytest tests               # 50 tests, about twenty seconds
 ruff format --check . && ruff check .   # the code is formatted and lint-clean (config in pyproject.toml)
 ```
 
@@ -58,7 +58,7 @@ the world regenerate the arena at once.
 | Tributes | Podium presets (edge ring, around cornucopia, random, two sides) or drag tributes. Rename, change district, sex, scores, brain, grant a weapon, food, medkits or sponsor favour, set starting bars. |
 | Brains | Default brain, and the neural network: the number of hidden layers, the nodes in each, activation, every initializer, with the 50 inputs and 16 outputs listed. |
 | Play | Speed presets, back-to-back games, replays, GIF export. |
-| Train | Genetic algorithm or REINFORCE, the reward function, live performance, stability and timing plots, the champion's genes with the changed ones highlighted, a training feed that replays a real evaluation game from every step or lets the newest champion play live, watch the champion, save the run folder. |
+| Train | Imitation pretraining (copy the voting brain's instincts), genetic algorithm or REINFORCE, warm starts from the current champion, the reward function, live performance, stability and timing plots, the champion's genes with the changed ones highlighted, a training feed that replays a real evaluation game from every step or lets the newest champion play live, watch the champion, save the run folder. |
 | Research | Parameter sweeps over any setting, and one-PNG-per-chart exports of the behaviour of every game watched. |
 
 The right panel's Network tab draws the selected neural tribute's network as
@@ -194,7 +194,7 @@ and is one toggle away.
 | `cannon_and_sky` | `True` | the books | Tributes know how many remain and, having trained together, how strong. |
 | `endgame_instinct` | `False` | decision | Bold tributes head for the centre when few remain; off unless you want it. |
 | `noise`, `terrain` | see below | video, tuned | Perlin settings and the relative thresholds. |
-| `neural` | (16,), tanh, xavier_uniform | convention | One hidden layer; 50 inputs, 16 outputs, 1,088 weights. |
+| `neural` | (64, 32), tanh, xavier_uniform | measured | Two hidden layers; 50 inputs, 16 outputs, 5,872 weights. A single 16-neuron layer copies the voting brain 64% of the time after imitation; 64 by 32 reaches 80%. |
 | `reward` | see below | convention | The reinforcement-learning reward function. |
 
 ### Noise and terrain
@@ -236,17 +236,26 @@ caution 0.5, urgency power 2.0; a need below 0.2 casts 20 extra votes
 | `kill` | 1.0 | Per elimination. |
 | `damage_taken` | -2.0 | Per point of health lost. |
 | `need_gain` | 0.5 | Per point of thirst or hunger restored while below half. |
+| `approach` | 0.0 | Per cell moved closer to water while thirsty (or grass while hungry). A dense shaping reward, off by default: instincts come from imitation pretraining instead. |
 | `placement` | 2.0 | Scaled by placing at the end: full for first, nothing for last. |
 | `discount` | 0.98 | How much a reward one tick later is worth now. |
 
 ### Trainers
 
-| Setting | Genetic (`TrainingConfig`) | REINFORCE (`RLConfig`) |
-| --- | --- | --- |
-| Steps | 20 generations, population 48, 2 games per genome | 30 epochs, 4 games each, 6 learners per game |
-| Selection and update | elite 10%, tournament of 3, crossover 0.5, mutation rate 0.1, scale 0.1 | Adam, learning rate 1e-3 (value 3e-3), entropy bonus 0.01, gradient clip 5 |
-| Validation | champion versus the default brain on 2 fixed seeds | greedy policy on 2 fixed seeds |
-| Logged per step | best, mean, worst and validation fitness, seconds, telemetry | policy and value loss, entropy, train and validation return, survival, win and kill rate, seconds, telemetry |
+| Setting | Imitation (`ImitationConfig`) | Genetic (`TrainingConfig`) | REINFORCE (`RLConfig`) |
+| --- | --- | --- | --- |
+| Steps | 30 epochs over 12 teacher games (about 40,000 decisions), batch 256 | 20 generations, population 48, 2 games per genome | 30 epochs, 4 games each, 6 learners per game |
+| Update | Adam 1e-3 on cross-entropy against the voting brain's choices (teacher at chaos 0) | elite 10%, tournament of 3, crossover 0.5, mutation rate 0.1, scale 0.1 (use about 0.02 after a warm start) | Adam, learning rate 1e-3 (value 3e-3), entropy bonus 0.01, gradient clip 5 |
+| Validation | held-out 20% of decisions, plus 1 greedy game on a fixed seed | champion versus the default brain on 2 fixed seeds | greedy policy on 2 fixed seeds |
+| Logged per step | train and validation loss and accuracy, validation survival and win rate, seconds, telemetry | best, mean, worst and validation fitness, seconds, telemetry | policy and value loss, entropy, train and validation return, survival, win and kill rate, seconds, telemetry |
+| Warm start | from a champion, optional | population seeded with the champion and close relatives | policy starts from the champion |
+
+Why imitation comes first: a fresh network chooses "drink" one time in
+sixteen even while standing in water, so every untrained tribute dies of
+thirst around day three and neither evolution nor reward learning gets a
+signal to climb (measured: 10 of 12 learner deaths were dehydration after 8
+generations or epochs). After imitation pretraining the student survives
+twice as long and dehydration falls to 2 of 12.
 
 ## How the video's ideas map to the code
 
@@ -272,7 +281,7 @@ hunger_games/
   brain/  base.py, initializers.py, mlp.py (backprop, Adam), voting.py, random_brain.py, neural.py
   player.py, sponsors.py, gamemaker.py, scenario.py, records.py
   game.py (decision and tick hooks), recorder.py, runner.py, renderer.py, analysis.py
-  training/  genetic.py, reinforce.py, runs.py
+  training/  imitation.py, genetic.py, reinforce.py, runs.py
   research/  telemetry.py, plots.py, experiments.py
   ui/  painter.py, session.py, canvas.py, visualizer.py, app.py, screenshots.py
   __main__.py

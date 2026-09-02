@@ -2,7 +2,7 @@
 
 **Source:** [hunger_games/research/plots.py](../../hunger_games/research/plots.py)
 **Depends on:** `pathlib`; `matplotlib` (with the `Agg` backend forced at import), `matplotlib.animation.FuncAnimation`; `numpy`; `pandas`; `pillow` (GIF writer); [telemetry.md](telemetry.md) (`ALIVE_BIN_LABELS`, `NEED_BIN_LABELS`)
-**Used by:** [../training/runs.md](../training/runs.md) (`training_run_plots`); [experiments.md](experiments.md) (`curves`, `stacked_area_over_training`, `behaviour_plots`); [../analysis.md](../analysis.md) (`make_report` imports it inside the function and calls `batch_plots` and `behaviour_plots`, so `python -m hunger_games analyze` writes these PNGs too); [../ui/session.md](../ui/session.md) (`behaviour_plots` for the export button); `tests/test_research.py`
+**Used by:** [../training/runs.md](../training/runs.md) (`training_run_plots`); [experiments.md](experiments.md) (`curves`, `stacked_area_over_training`, `behaviour_plots`); [../analysis.md](../analysis.md) (`make_report` imports it inside the function and calls `batch_plots` and `behaviour_plots`, so `python -m hunger_games analyze` writes these PNGs too); [../ui/session.md](../ui/session.md) (`behaviour_plots` for the export button); `tests/test_research.py`; `tests/test_imitation.py` (through `save_run`)
 
 ## Purpose
 
@@ -25,6 +25,8 @@ The functions read three kinds of data:
 **Row shares.** Most behaviour charts divide each row of a table by its row total, so bars show percentages of the decisions made at that level. A level with no decisions is divided by 1 instead of 0 and stays empty.
 
 **Nats.** Entropy here uses the natural log. Nine equally likely actions give `ln 9 = 2.20` nats.
+
+**History row keys.** Each trainer's `to_row()` has its own keys: `train_loss`, `val_accuracy` and so on for imitation, `best_fitness` for the GA, `train_return` for REINFORCE. `training_run_plots` picks the chart set by the `method` string, so the method must match the rows.
 
 ## Walkthrough
 
@@ -109,16 +111,19 @@ Animates a chart growing one point per frame, for slides. It creates one empty l
 
 #### `training_run_plots(history_rows, summaries, folder, method) -> list[Path]`
 
-Writes every chart a training run should have. `method` is `"genetic"` or anything else (treated as REINFORCE).
+Writes every chart a training run should have and returns the paths. With no history rows it returns an empty list.
 
-| Method | Files |
-| --- | --- |
-| genetic | `fitness.png` (best, mean, validation), `fitness.gif` |
-| reinforce | `reward.png` (train and validation return), `losses.png` (policy and value), `entropy.png`, `survival.png`, `win_kill_rate.png`, `reward.gif` |
-| both | `timing.png` |
-| both, when `summaries` is not empty | `action_distribution_over_training.png`, `death_needs_over_training.png`, `behaviour_over_training.png`, then every `behaviour_plots` file for the **last** summary |
+The x axis is `row["generation"]` when `method == "genetic"` and `row["epoch"]` otherwise. Then the performance charts depend on `method`:
 
-With no history rows it returns an empty list.
+| Method | Files | Row keys read |
+| --- | --- | --- |
+| `"imitation"` | `losses.png` (training and validation cross-entropy, titled "Imitation loss (cross-entropy)"), `accuracy.png` (training and validation accuracy, titled "How often the student picks the teacher's action"), `survival.png` (validation survival in ticks), `win_rate.png` (validation win rate), `losses.gif` (the two loss curves growing) | `train_loss`, `val_loss`, `train_accuracy`, `val_accuracy`, `val_survival`, `val_win_rate` |
+| `"genetic"` | `fitness.png` (best, mean, validation), `fitness.gif` (best and validation growing) | `best_fitness`, `mean_fitness`, `val_fitness` |
+| anything else (REINFORCE) | `reward.png` (train and validation return), `losses.png` (policy and value), `entropy.png`, `survival.png` (train and validation), `win_kill_rate.png` (train win rate, validation win rate, kills per game), `reward.gif` (returns growing) | `train_return`, `val_return`, `policy_loss`, `value_loss`, `entropy`, `train_survival`, `val_survival`, `win_rate`, `val_win_rate`, `kill_rate` |
+
+After that, for every method: `timing.png`, and, when `summaries` is not empty, `action_distribution_over_training.png`, `death_needs_over_training.png`, `behaviour_over_training.png`, then every `behaviour_plots` file for the **last** summary.
+
+Note that `losses.png` and `survival.png` exist for both imitation and REINFORCE but hold different lines: imitation's `losses.png` is one loss on two data sets, REINFORCE's is two different losses; imitation's `survival.png` has a validation line only.
 
 #### `behaviour_plots(summary, folder) -> list[Path]`
 
@@ -147,6 +152,7 @@ A few conventions hold across the file, so a reader can compare charts:
 - x axes that describe the field run from "most alive" on the left to "final few" on the right, so time reads left to right.
 - Training charts use the step index on x (`generation` or `epoch`), never wall-clock time. Use `timing.png` to convert.
 - A GIF and a PNG with the same stem show the same data; the GIF is for slides.
+- For an imitation run, `accuracy.png` says how well the student copies and `survival.png` says whether the copy works in a game. Read them together: accuracy can rise while survival stalls if the student copies the easy decisions and misses the rare life-saving ones.
 
 ## How to use it / experiment
 
@@ -159,6 +165,16 @@ from hunger_games.research import plots
 rows = json.load(open("results/rl_20260902_150000/history.json"))
 plots.curves([r["epoch"] for r in rows], {"entropy": [r["entropy"] for r in rows]},
              "Policy entropy", "epoch", "nats", "paper/entropy.png")
+```
+
+Overlay two imitation runs to compare network sizes:
+
+```python
+small = json.load(open("results/student16_20260902_150000/history.json"))
+big = json.load(open("results/student64x32_20260902_150500/history.json"))
+plots.curves([r["epoch"] for r in big],
+             {"(16,)": [r["val_accuracy"] for r in small], "(64, 32)": [r["val_accuracy"] for r in big]},
+             "Validation accuracy by network size", "epoch", "accuracy", "paper/accuracy_by_size.png")
 ```
 
 From a sweep's `summary.json`, one behaviour chart per value:
@@ -202,6 +218,7 @@ Ideas:
 
 - Importing this file switches the whole process to the `Agg` backend. Do not import it in code that wants to open a matplotlib window. The `watch` command never imports it. `analysis.make_report` imports it inside the function, after the CSV files are loaded, which is why `analyze --show` is the one place a window and this module meet; if the window fails to open there, that is the reason.
 - `curve_gif` needs pillow. Without it `animation.save` raises an error.
+- `training_run_plots` trusts `method`. Rows from one trainer with another trainer's method name raise `KeyError` on the first missing key. Only `"imitation"` and `"genetic"` are matched exactly; every other string gets the REINFORCE set.
 - `training_run_plots` writes the detailed behaviour charts for the last summary only. For an earlier generation call `behaviour_plots(summaries[i], folder)` yourself.
 - `stacked_area_over_training` uses the row index as x, not `generation` or `epoch`. They agree because every step contributes one summary.
 - `death_heatmap` bins with `range=[[0, height], [0, width]]`, so pass the real arena size or deaths near the edge land in the wrong cell.
