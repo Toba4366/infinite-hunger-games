@@ -13,7 +13,9 @@ that way: whenever code, docs or defaults change, add a line under
   cold and the warm side of a comparison their own trainer settings, because
   the sensitivity sweep showed they want opposite ones; a prefix naming a
   method that is not being run, or a field no method has, is an error.
-  `run_lessons.sh` uses them. Tests in `tests/test_runner_flags.py`.
+  `run_lessons.sh` uses them, with an extension of up to 16,000 iterations
+  or 14 hours per variant so slow methods can graduate. Tests in
+  `tests/test_runner_flags.py`.
 
 ### Fixed
 - `pyproject.toml` declared version 0.3.0 while the changelog had shipped

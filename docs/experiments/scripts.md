@@ -38,13 +38,13 @@ nohup bash experiments/run_sensitivity.sh > results/sensitivity_log.txt 2>&1 &
 
 ## `run_lessons.sh`
 
-The second full experiment, on the lesson curriculum, trained to graduation. Every method, cold and warm pairs, `--curriculum lessons`, 150 iterations first and then up to 3,000 more iterations or four hours for anything short of the criterion at the last lesson; champions are stage-aware. The cold variants use the settings the sensitivity sweep found for cold starts (`--cold-set episodes_per_epoch=16 --cold-set entropy_bonus=0.001 --cold-set reinforce.learning_rate=3e-3`) and the warm variants keep the defaults, so the cold-against-warm comparison is not confounded by settings tuned for one side. Then imitation and warm REINFORCE (the first experiment's winner) at three network sizes on the same curriculum.
+The second full experiment, on the lesson curriculum, trained to graduation. Every method, cold and warm pairs, `--curriculum lessons`, 150 iterations first and then up to 16,000 more iterations or 14 hours for anything short of the criterion at the last lesson (8 hours in the sizes block); champions are stage-aware. The cold variants use the settings the sensitivity sweep found for cold starts (`--cold-set episodes_per_epoch=16 --cold-set entropy_bonus=0.001 --cold-set reinforce.learning_rate=3e-3`) and the warm variants keep the defaults, so the cold-against-warm comparison is not confounded by settings tuned for one side. Then imitation and warm REINFORCE (the first experiment's winner) at three network sizes on the same curriculum.
 
 ```bash
 nohup bash experiments/run_lessons.sh > results/lessons_log.txt 2>&1 &
 ```
 
-Expect it to run overnight: eight variants with up to 3,150 iterations each, then six more.
+Expect it to run for days rather than hours: a variant that never graduates uses its full 14 hours, and there can be six of them, then the sizes block.
 
 ## Gotchas
 
