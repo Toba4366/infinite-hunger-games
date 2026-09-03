@@ -1,7 +1,7 @@
 # `genetic.py`
 
 **Source:** [hunger_games/training/genetic.py](../../hunger_games/training/genetic.py)
-**Depends on:** `json`, `time`, `collections.abc.Callable`, `concurrent.futures.ProcessPoolExecutor`, `dataclasses`, `pathlib` (standard library); `numpy`; [brain/__init__.py](../brain/init.md) (`Brain`, `create_brain`); [hunger_games/config.py](../config.md) (`NeuralConfig`, `SimulationConfig`); [hunger_games/game.py](../game.md) (`Game`); [hunger_games/recorder.py](../recorder.md) (`Recorder`, `Recording`); [hunger_games/research/telemetry.py](../research/telemetry.md) (`BehaviorTelemetry`); [hunger_games/scenario.py](../scenario.md) (`Scenario`); [training/common.py](common.md) (`Curriculum`, `EventLog`, `IterationStats`, `LearnerSpec`, `learner_ids`); [training/reinforce.py](reinforce.md) (`_run_episode_job`, imported inside `evaluate_against_voting` and `validate` to avoid an import cycle)
+**Depends on:** `json`, `time`, `collections.abc.Callable`, `concurrent.futures.ProcessPoolExecutor`, `dataclasses`, `pathlib` (standard library); `numpy`; [brain/__init__.py](../brain/init.md) (`Brain`, `create_brain`); [hunger_games/config.py](../config.md) (`NeuralConfig`, `SimulationConfig`); [hunger_games/game.py](../game.md) (`Game`); [hunger_games/recorder.py](../recorder.md) (`Recorder`, `Recording`); [hunger_games/research/telemetry.py](../research/telemetry.md) (`BehaviorTelemetry`); [hunger_games/scenario.py](../scenario.md) (`Scenario`); [training/common.py](common.md) (`Curriculum`, `EventLog`, `IterationStats`, `LearnerSpec`, `learner_ids`); [training/reinforce.py](reinforce.md) (`_run_episode_job`, imported inside `evaluate_against_voting` and `validate_with_wins` to avoid an import cycle)
 **Used by:** [training/__init__.py](init.md) (re-exports `GenerationStats`, `GeneticTrainer`, `TrainingConfig`); [training/runs.py](runs.md) (`save_run` reads `settings`, `config`, `history`, `history_rows()`, `learning_history`, `events`, `champion`, `save_champion`); [research/comparison.py](../research/comparison.md) (the `"genetic"` method); [hunger_games/ui/session.py](../ui/session.md) (`GeneticTrainer` with `initial_genome` and `curriculum`, `TrainingConfig`, `previous_champion`, `load_champion`, `save_champion`, `learning_history`, `events`); [hunger_games/ui/app.py](../ui/app.md) (`TrainingConfig`, including the `opponents` combo); [experiments/run_ga.py](../experiments/run_ga.md); `tests/test_methods.py`; `tests/test_recorder_training.py`; `tests/test_research.py`; `tests/test_ui_session.py`; `tests/test_feed.py`; `tests/test_imitation.py` (the warm start)
 
 ## Purpose
@@ -15,7 +15,7 @@ There are two ways to score a genome, chosen by `TrainingConfig.opponents`:
 - **`"voting"` (the default).** Each genome plays as the learner against the voting brain, in the same games and with the same episode return that REINFORCE, PPO and NEAT use. Fitness is an absolute number, comparable across generations and across methods.
 - **`"self"`.** The population plays itself, 24 genomes to a game, and fitness is placement plus small bonuses. This is the original tournament style from the first version of the trainer.
 
-Either way the trainer also does what every trainer in this package does: validates the champion on fixed seeds, records behaviour telemetry, keeps a showcase recording per generation, fills the shared `IterationStats`, logs events, applies a curriculum, and warm-starts from an `initial_genome`.
+Either way the trainer also does what every trainer in this package does: validates the champion on fixed seeds and reports its score and its game-level win rate, records behaviour telemetry, keeps a showcase recording per generation, fills the shared `IterationStats`, logs events, applies a curriculum, and warm-starts from an `initial_genome`.
 
 ## Concepts you need
 
@@ -24,6 +24,8 @@ Either way the trainer also does what every trainer in this package does: valida
 **Fitness.** One number per genome saying how well it did. In `"voting"` mode it is the mean episode return. In `"self"` mode it is mostly placement (1.0 for the victor, 0.0 for first out), with small bonuses per kill and per day survived.
 
 **Coevolution.** In `"self"` mode genomes are scored by playing *against each other*, so fitness is relative: a genome that scored 0.8 in generation 3 faced a different, weaker crowd than one scoring 0.8 in generation 30. Only `val_fitness`, measured against a fixed opponent on fixed seeds, is comparable across generations. In `"voting"` mode the opponents never change, so this problem goes away.
+
+**Game-level win.** In `"voting"` mode a genome drives several copies of itself in one game, and only one tribute can be the victor. `play_rl_episode` reports `learner_won`, true when any copy won. Win rates here are fractions of games with that flag, so they can reach 1.0.
 
 **Elitism, tournament selection, crossover, mutation.** The four moving parts of a GA. Elites are copied unchanged so the best is never lost. A tournament picks a parent by drawing a few random genomes and keeping the fittest. Crossover mixes two parents gene by gene. Mutation adds Gaussian noise to a fraction of genes.
 
@@ -92,6 +94,8 @@ What happened in one generation. Built by `step_generation` and kept in `trainer
 | `telemetry` | `dict` (default `{}`, `repr=False`) | Merged `BehaviorTelemetry.summary()` of this generation's evaluation games |
 | `showcase` | `Recording | None` (default `None`, `repr=False`) | A recording of one real evaluation game from this generation, or `None` when `record_showcase` is off |
 
+There is no validation win rate on `GenerationStats`. It goes to the shared `IterationStats.val_win_rate` through `_last_val_win_rate` (see `step_generation`).
+
 #### `to_row()`
 
 ```python
@@ -124,7 +128,7 @@ Plays one `"self"` mode game where tribute `i` is driven by `genomes[i]`. Copies
 def play_validation_game(config: SimulationConfig, scenario: Scenario | None, brain_name: str, genome: np.ndarray, learner_ids: list[int], seed: int) -> list[tuple[int, int, float]]:
 ```
 
-Plays one game where the slots in `learner_ids` carry `genome` and everyone else uses `create_brain(config.brain_name, ...)`. Returns `(placement, kills, days)` for the learners only. Used by `validate` in `"self"` mode.
+Plays one game where the slots in `learner_ids` carry `genome` and everyone else uses `create_brain(config.brain_name, ...)`. Returns `(placement, kills, days)` for the learners only. Used by `validate_with_wins` in `"self"` mode.
 
 ### `_run_job(args)` and `_run_validation_job(args)`
 
@@ -154,7 +158,7 @@ The starting population is built one of two ways:
 - **`initial_genome is None` (a cold start).** `population_size` fresh brains are created and their genomes kept.
 - **`initial_genome` given (a warm start).** `population[0]` is an exact copy. The other entries are the genome plus Gaussian noise with standard deviation `0.25 * training.mutation_scale`. The spread is a quarter of the mutation scale because a trained network's weights are small and full-size noise erases its instincts. Only the constructor uses this quarter scale.
 
-Also sets up `fitness` (zeros), `history`, `generation = 0`, `_stop`, `_started`, `_last_telemetry` and `_last_showcase`.
+Also sets up `fitness` (zeros), `history`, `generation = 0`, `_stop`, `_started`, `_last_telemetry` and `_last_showcase`. `_last_val_win_rate` is not created here; `step_generation` sets it and `_record_iteration` reads it with a `getattr` default of `0.0`.
 
 #### `settings` (property)
 
@@ -229,7 +233,7 @@ Only in `"voting"` mode with a curriculum: copies the config with `num_players =
 def evaluate_against_voting(self, on_progress: Callable[[int, int], None] | None = None) -> tuple[np.ndarray, list[dict], Recording | None, list[float], list[int]]:
 ```
 
-`"voting"` mode scoring. For every genome and every round it builds a `play_rl_episode` job `(config, scenario, LearnerSpec(kind, genome, neural), learner_ids, seed, True, record)`, with `record` only for the first genome's first round when `record_showcase` is on. `True` is `greedy`, so genomes play with chaos 0. Jobs run through a pool when `workers > 1`. Each job's outcomes (one per learner slot) are averaged into the owning genome's total, and the telemetry, survival ticks and win flags are collected. Sets `self.fitness`, `_last_telemetry` and `_last_showcase`. Returns `(fitness, telemetry, showcase, lengths, wins)`.
+`"voting"` mode scoring. For every genome and every round it builds a `play_rl_episode` job `(config, scenario, LearnerSpec(kind, genome, neural), learner_ids, seed, True, record)`, with `record` only for the first genome's first round when `record_showcase` is on. `True` is `greedy`, so genomes play with chaos 0. Jobs run through a pool when `workers > 1`. For each job: the outcomes (one per learner slot) are averaged into the owning genome's total, the telemetry summary is kept, every learner's `survival` is added to `lengths`, and one entry `int(result["learner_won"])` is added to `wins`. So `wins` has one flag per game (genome times round), not per learner copy. Sets `self.fitness`, `_last_telemetry` and `_last_showcase`. Returns `(fitness, telemetry, showcase, lengths, wins)`.
 
 #### `validate(genome)`
 
@@ -237,7 +241,22 @@ def evaluate_against_voting(self, on_progress: Callable[[int, int], None] | None
 def validate(self, genome: np.ndarray) -> float:
 ```
 
-Returns `0.0` if `validation_games <= 0`. In `"voting"` mode it plays `validation_games` `play_rl_episode` jobs on seeds `validation_seed + i`, greedy and never recorded, and returns the mean episode return over every learner slot, the same number the fitness uses. In `"self"` mode it plays `play_validation_game` jobs and returns the mean `fitness_of` over the learner rows.
+`self.validate_with_wins(genome)[0]`: the validation score only, kept for callers that want a single number.
+
+#### `validate_with_wins(genome)`
+
+```python
+def validate_with_wins(self, genome: np.ndarray) -> tuple[float, float]:
+```
+
+Mean score and win rate of a genome on the fixed validation seeds. Returns `(0.0, 0.0)` if `validation_games <= 0`.
+
+| Mode | Games | Score | Win rate |
+| --- | --- | --- | --- |
+| `"voting"` | `validation_games` `play_rl_episode` jobs on seeds `validation_seed + i`, greedy, never recorded | Mean episode return over every learner slot, the same number the fitness uses | Game-level: the mean of `learner_won` over the games |
+| `"self"` | `validation_games` `play_validation_game` jobs on the same seeds | Mean `fitness_of` over every learner row | Per learner row: the fraction of rows with placement 1 |
+
+Note the two modes count wins differently. `"self"` mode has no `learner_won` flag, so it counts first placings per copy, which caps the rate at one over `learners_per_game`.
 
 #### `step_generation(on_progress=None)`
 
@@ -251,7 +270,7 @@ One full generation:
 2. `_apply_curriculum()`.
 3. Score everyone: `evaluate_against_voting` in `"voting"` mode (which also gives `lengths` and `wins`), else `evaluate`.
 4. `ranking = np.argsort(fitness)[::-1]`, best first. The champion is a copy of `population[ranking[0]]`.
-5. `val_fitness = self.validate(champion)`.
+5. `val_fitness, val_win_rate = self.validate_with_wins(champion)`, and `self._last_val_win_rate = val_win_rate`.
 6. Merge this generation's telemetry.
 7. Build `GenerationStats` and append it to `history`.
 8. `_record_iteration(stats, list(fitness), lengths, wins)`, the shared record.
@@ -285,10 +304,14 @@ Appends the unified `IterationStats`, logs events, and advances the curriculum:
 
 - `iteration = stats.generation`, `scores` = every genome's fitness, `mean_score` their mean, `best_score = stats.best_fitness`.
 - `entropy` from the telemetry (`0.0` without).
-- `mean_length` is the mean of `lengths` when there are any (`"voting"` mode), else the telemetry's `mean_survival_ticks`; `win_rate` likewise from `wins` or the telemetry's `win_rate`.
-- `val_score = stats.val_fitness`, the timings, `stage` and `opponents` from the curriculum (or `num_players - 1`), `extra={"worst_fitness": ...}`, `learner = stats.champion`, the telemetry and the showcase.
+- `mean_length` is the mean of `lengths` when there are any (`"voting"` mode), else the telemetry's `mean_survival_ticks`.
+- `win_rate` is the mean of `wins` when there are any (`"voting"` mode, game-level), else the telemetry's `win_rate`.
+- `val_score = stats.val_fitness`; `val_win_rate = getattr(self, "_last_val_win_rate", 0.0)`.
+- The timings, `stage` and `opponents` from the curriculum (or `num_players - 1`), `extra={"worst_fitness": ...}`, `learner = stats.champion`, the telemetry and the showcase.
 
 Then an `"evolution"` event (`generation G: best B, mean M, validation V`), a `"record"` event when `best_fitness` beats the best seen so far (kept in `best_mean_score`), and `curriculum.observe(mean_score)` with a `"curriculum"` event on promotion.
+
+**The curriculum call passes the win rate.** `observe` is called with the mean score and `judged_win`, which is `record.val_win_rate` when `validation_games > 0` and `record.win_rate` otherwise, so the genetic learner is promoted only by winning games, like the other trainers.
 
 #### `step(on_progress=None)`
 
@@ -360,7 +383,7 @@ config = SimulationConfig(width=80, height=80, max_days=8)
 trainer = GeneticTrainer(config, TrainingConfig(population_size=24, generations=10, seed=0))
 trainer.run()
 for s in trainer.learning_history:
-    print(f"gen {s.iteration:2d} best {s.best_score:.2f} mean {s.mean_score:.2f} val {s.val_score:.2f} win {s.win_rate:.2f}")
+    print(f"gen {s.iteration:2d} best {s.best_score:.2f} mean {s.mean_score:.2f} val {s.val_score:.2f} val win {s.val_win_rate:.2f}")
 trainer.save_champion("champion.json")
 ```
 
@@ -383,10 +406,11 @@ The relatives in the first population sit at `0.25 * 0.02 = 0.005` from the cham
 
 ```python
 from hunger_games.training import Curriculum, CurriculumConfig
-trainer = GeneticTrainer(config, TrainingConfig(seed=0), curriculum=Curriculum(CurriculumConfig()))
+curriculum = Curriculum(CurriculumConfig(promote_on="score", threshold=3.0, window=5))
+trainer = GeneticTrainer(config, TrainingConfig(seed=0), curriculum=curriculum)
 ```
 
-Every generation's episodes are sized to the stage; `learning_history[i].opponents` shows the ladder.
+Every generation's episodes are sized to the stage; `learning_history[i].opponents` shows the ladder. Because promotion is judged on validation wins, the ladder is climbed only when the champion wins a majority of its validation games at each stage.
 
 **Use the cores.** Put the code in a function, guard it, and set `workers`:
 
@@ -405,16 +429,19 @@ if __name__ == "__main__":
 
 ## Gotchas
 
+- Promotion is judged on validation wins (game-level), so with `validation_games=2` a single win moves the five-iteration window by 0.1; raise `validation_games` for a steadier signal.
 - **The macOS spawn rule.** On macOS, `multiprocessing` starts workers with `spawn`, which imports your script afresh in each worker. Without `if __name__ == "__main__":` the worker re-runs the training code at import time. The dashboard avoids the issue by running the trainer in a thread with `workers=1` by default.
 - Everything sent to a worker is pickled: `config`, `scenario`, the genomes (inside a `LearnerSpec` in `"voting"` mode). A `Scenario` with a large painted map is copied once per job.
 - **Warm starts with the default mutation scale lose the instincts.** Every child after generation 0 gets full `mutation_scale` noise on 10 percent of its genes. Use a scale around 0.02 for a warm-started neural population.
 - **Showcases stay in memory.** Every generation's recording lives in `history` until the trainer is dropped. Set `record_showcase=False` for long runs.
 - In `"voting"` mode genomes play greedily (chaos 0), so a genome's score on a given seed is deterministic. `rounds_per_generation` sets how many seeds each genome sees.
+- `win_rate` in `"voting"` mode is over every evaluation game of the whole population (96 with the defaults), not the champion's games. It says how often any genome's copies won, which is a population-wide number. `val_win_rate` is the champion's.
+- `"self"` mode validation counts wins per learner row, not per game, so its `val_win_rate` is capped at one over `learners_per_game`. `"voting"` mode counts games.
 - `champion` is picked by training `best_fitness`. The generation with the highest `val_fitness` may be a different one; `max(trainer.history, key=lambda s: s.val_fitness).champion` gives that genome.
 - The attribute that tracks the `"record"` events is called `best_mean_score` but holds the best `best_fitness`, not a mean.
 - In `"self"` mode the telemetry counts every tribute (they are all population members); in `"voting"` mode it counts only the learner slots.
 - `collect_telemetry=False` only affects `"self"` mode. `play_rl_episode` always measures the learners.
-- `validation_games=0` makes `val_fitness` always `0.0` and the validation line in `fitness.png` flat at zero.
+- `validation_games=0` makes `val_fitness` and `val_win_rate` always `0.0` and the validation line in `fitness.png` flat at zero.
 - `GeneticTrainer.__init__` and `champion_brain` build brains without the `endgame_instinct` argument, and `build_learner` builds neural learners without it too. Only opponents get `config.endgame_instinct`.
 - A `champion.json` from one `NeuralConfig` will not load into a brain with a different architecture: `set_genome` raises `ValueError` about the size. The same applies to `initial_genome`.
 - The curriculum is ignored in `"self"` mode, and `IterationStats.stage` then stays 0 while `opponents` is `num_players - 1`.

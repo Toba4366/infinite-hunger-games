@@ -364,6 +364,7 @@ Setup tab: Random above 0.5 starts everyone somewhere between half and full; dra
 Default names are offered by the file dialogs; the extension is added if you leave it off.
 
 ## Known limits
+- To watch a champion from a results folder against voting opponents, use **Load champion into the learner slots and watch** on the Train tab and pick `results/<run>/runs/<variant>/champion.json`. To watch a comparison's training games, run it with `--save-replays-every N` and load the replays from the Play tab.
 
 - The game makers' circle is drawn as a solid red ring, not the dashed circle the matplotlib renderer uses.
 - Painting, placing loot and dragging podiums only work while no game is loaded. Load replay clears the live game (and shows the replay's map); otherwise restart the dashboard to edit again.

@@ -399,6 +399,7 @@ class ImitationTrainer:
             mean_length=val_survival,
             win_rate=val_win_rate,
             val_score=float(np.mean(val_returns)) if val_returns else 0.0,
+            val_win_rate=val_win_rate,
             seconds=stats.seconds,
             cumulative_seconds=stats.cumulative_seconds,
             stage=0,
@@ -453,7 +454,8 @@ class ImitationTrainer:
         # Outcomes.
         outcomes = [o for episode in episodes for o in episode["outcomes"].values()]
         survival = float(np.mean([o["survival"] for o in outcomes])) if outcomes else 0.0
-        win_rate = float(np.mean([o["won"] for o in outcomes])) if outcomes else 0.0
+        # Game-level: a validation game is won when any student copy was the victor.
+        win_rate = float(np.mean([episode.get("learner_won", False) for episode in episodes])) if episodes else 0.0
         # Telemetry merged.
         from hunger_games.research.telemetry import BehaviorTelemetry
 

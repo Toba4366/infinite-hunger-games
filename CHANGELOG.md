@@ -6,6 +6,55 @@ Each entry was written from the working session that produced it; keep it
 that way: whenever code, docs or defaults change, add a line under
 **Unreleased** and move the block to a version heading when it ships.
 
+## 0.7.0 - 2026-09-03 (train until it wins)
+
+Requested: promote the curriculum only when the learner actually wins,
+train every brain until it consistently wins a majority of its games, prove
+the README's claims, and test whether warm starts really end better.
+
+### Added
+- Game-level win rates everywhere: a game is won when a learner copy is the
+  victor (with six copies only one can win, so per-copy rates were capped at
+  one sixth). `IterationStats.val_win_rate`; every trainer's validation
+  returns wins as well as scores.
+- `CurriculumConfig.promote_on` ("win_rate" by default), `win_threshold`
+  0.5, and `max_iterations_per_stage` 0 meaning no timeout.
+- `ComparisonConfig.until_win_rate` / `win_window`: each variant trains until
+  it wins a majority of validation games over the window at the final
+  curriculum stage; `iterations_to_criterion` and `seconds_to_criterion` are
+  recorded, and the report gains a criterion table and a warm-versus-cold
+  table. `run_comparison.py --pairs --until-win --window`.
+- NEAT genomes compile to an evaluation plan (about 30 microseconds per
+  forward pass, from several milliseconds), making long NEAT runs feasible.
+- `results/run_full.sh`: the full experiment script (methods cold and warm,
+  sizes, initialisers).
+- Watching experiments: the Train tab's "Load champion into the learner
+  slots and watch" button plays a saved champion against voting opponents,
+  and `run_comparison.py --save-replays-every N` keeps replays of training
+  games for the Play tab.
+
+### Fixed
+- The genetic trainer now passes its validation win rate to the curriculum,
+  so it can be promoted like the other methods (it previously stayed on the
+  first stage forever under the win-based rule).
+
+- An extension phase in the comparison: `ComparisonConfig.extended_iterations`
+  and `extended_time_budget` (`run_comparison.py --extend-iterations`,
+  `--extend-hours`). After every variant has had its first budget, those
+  still short of the win criterion keep training with the same population or
+  weights, so a slow cold start is measured for how long it really needs
+  rather than cut off, and its final network still enters the tournament.
+  The first-budget snapshot is kept under `runs_first_budget/`; the table
+  gains `extended_iterations`; the report's criterion and warm-versus-cold
+  tables show iterations trained, extended iterations and seconds. The full
+  experiment script extends up to 1000 iterations or 2 hours per variant.
+
+### Changed
+- `MethodComparison.train_all` passes each iteration's `IterationStats` to the
+  progress callback and `run` prints stage, opponents, validation win rate,
+  mean score and seconds per iteration, plus a line when a variant reaches
+  the win criterion, so a running experiment's log shows curriculum progress.
+
 ## 0.6.0 - 2026-09-02 (one learner, five methods, a research comparison)
 
 Requested, after reading the transcripts of the zombie (PPO), Monopoly

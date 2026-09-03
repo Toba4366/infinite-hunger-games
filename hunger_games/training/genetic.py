@@ -498,7 +498,7 @@ class GeneticTrainer:
             counts[owners[job_index]] += 1
             telemetry.append(result["telemetry"])
             lengths += [o["survival"] for o in outcomes]
-            wins += [o["won"] for o in outcomes]
+            wins.append(int(result.get("learner_won", False)))
             if result.get("recording") is not None:
                 showcase = result["recording"]
             if on_progress is not None:
@@ -510,9 +510,14 @@ class GeneticTrainer:
 
     def validate(self, genome: np.ndarray) -> float:
         """Mean score of a genome against the config's brain on the fixed validation seeds."""
+        # Score only.
+        return self.validate_with_wins(genome)[0]
+
+    def validate_with_wins(self, genome: np.ndarray) -> tuple[float, float]:
+        """Mean score and game-level win rate of a genome on the fixed validation seeds."""
         # None asked for.
         if self.training.validation_games <= 0:
-            return 0.0
+            return 0.0, 0.0
         # Voting mode: the same episode return the fitness uses.
         if self.training.opponents == "voting":
             from hunger_games.training.reinforce import _run_episode_job
@@ -536,7 +541,8 @@ class GeneticTrainer:
             else:
                 results = [_run_episode_job(job) for job in jobs]
             returns = [o["return"] for result in results for o in result["outcomes"].values()]
-            return float(np.mean(returns)) if returns else 0.0
+            wins = [int(result.get("learner_won", False)) for result in results]
+            return (float(np.mean(returns)) if returns else 0.0), (float(np.mean(wins)) if wins else 0.0)
         # Jobs.
         learners = self._learner_ids()
         arguments = [
@@ -555,8 +561,9 @@ class GeneticTrainer:
             for outcome in outcomes
             for p, k, d in outcome
         ]
-        # Mean.
-        return float(np.mean(scores)) if scores else 0.0
+        # Mean score; wins are counted as first placings.
+        wins = [1 if p == 1 else 0 for outcome in outcomes for p, _, _ in outcome]
+        return (float(np.mean(scores)) if scores else 0.0), (float(np.mean(wins)) if wins else 0.0)
 
     def step_generation(self, on_progress: Callable[[int, int], None] | None = None) -> GenerationStats:
         """Evaluate, validate, record, and breed the next population."""
@@ -578,7 +585,8 @@ class GeneticTrainer:
         # The champion of this generation.
         champion = self.population[ranking[0]].copy()
         # Validate it on the held-out seeds.
-        val_fitness = self.validate(champion)
+        val_fitness, val_win_rate = self.validate_with_wins(champion)
+        self._last_val_win_rate = val_win_rate
         # Merge this generation's behaviour telemetry.
         telemetry = BehaviorTelemetry.merge(self._last_telemetry) if self._last_telemetry else {}
         # Record the stats.
@@ -654,6 +662,7 @@ class GeneticTrainer:
             if wins
             else (float(stats.telemetry.get("win_rate", 0.0)) if stats.telemetry else 0.0),
             val_score=float(stats.val_fitness),
+            val_win_rate=float(getattr(self, "_last_val_win_rate", 0.0)),
             seconds=stats.seconds,
             cumulative_seconds=stats.cumulative_seconds,
             stage=self.curriculum.stage if self.curriculum else 0,
@@ -671,7 +680,9 @@ class GeneticTrainer:
         if stats.best_fitness > self.best_mean_score:
             self.best_mean_score = stats.best_fitness
             self.events.add("record", f"new best fitness {stats.best_fitness:.2f}")
-        if self.curriculum is not None and self.curriculum.observe(mean_score):
+        # Promotion is judged on validation wins when there are validation games, else on training-game wins.
+        judged_win = record.val_win_rate if self.training.validation_games > 0 else record.win_rate
+        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win):
             self.events.add(
                 "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
             )

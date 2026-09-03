@@ -136,6 +136,8 @@ class NeatGenome:
     species: int = -1
     # Cached node depths (computed on demand).
     _depths: dict[int, int] | None = field(default=None, repr=False, compare=False)
+    # Cached evaluation plan (computed on demand; see _compile).
+    _plan: tuple | None = field(default=None, repr=False, compare=False)
 
     # ------------------------------------------------------------ building
 
@@ -197,9 +199,67 @@ class NeatGenome:
         return depth
 
     def invalidate(self) -> None:
-        """Forget cached depths after a structural change."""
+        """Forget cached depths and the evaluation plan after a structural or weight change."""
         # Clear.
         self._depths = None
+        self._plan = None
+
+    def _compile(self) -> tuple:
+        """Turn the genome into arrays so a forward pass is a few numpy dot products instead of Python loops.
+
+        The plan holds, for every non-input node in depth order, the indices of
+        its enabled sources and their weights, plus the node's kind and activation.
+        """
+        # Cached.
+        if self._plan is not None:
+            return self._plan
+        # Node index by id.
+        index = {n.id: i for i, n in enumerate(self.nodes)}
+        depth = self.depths()
+        # Incoming enabled connections per node.
+        incoming: dict[int, list[ConnectionGene]] = {}
+        for c in self.connections:
+            if c.enabled:
+                incoming.setdefault(c.dst, []).append(c)
+        # Steps in depth order.
+        steps = []
+        for n in sorted(self.nodes, key=lambda node: depth[node.id]):
+            if n.kind in ("input", "bias"):
+                continue
+            sources = incoming.get(n.id, [])
+            steps.append(
+                (
+                    index[n.id],
+                    np.asarray([index[c.src] for c in sources], dtype=int),
+                    np.asarray([c.weight for c in sources], dtype=float),
+                    n.kind,
+                    ACTIVATIONS[n.activation],
+                )
+            )
+        # Where inputs, the bias and the outputs sit.
+        input_slots = np.asarray([index[n.id] for n in self.nodes if n.kind == "input"], dtype=int)
+        bias_slots = np.asarray([index[n.id] for n in self.nodes if n.kind == "bias"], dtype=int)
+        output_slots = np.asarray([index[n.id] for n in self.nodes if n.kind == "output"], dtype=int)
+        # Cache.
+        self._plan = (steps, input_slots, bias_slots, output_slots, len(self.nodes))
+        return self._plan
+
+    def _values(self, inputs: np.ndarray) -> np.ndarray:
+        """Every node's value for one input vector, using the compiled plan."""
+        # The plan.
+        steps, input_slots, bias_slots, output_slots, count = self._compile()
+        # Values by node index.
+        values = np.zeros(count, dtype=float)
+        # Inputs and bias.
+        inputs = np.asarray(inputs, dtype=float)
+        values[input_slots[: len(inputs)]] = inputs[: len(input_slots)]
+        values[bias_slots] = 1.0
+        # Evaluate in depth order.
+        for slot, sources, weights, kind, activation in steps:
+            total = float(values[sources] @ weights) if len(sources) else 0.0
+            values[slot] = float(activation(np.asarray(total))) if kind == "hidden" else total
+        # Done.
+        return values
 
     @property
     def hidden_count(self) -> int:
@@ -217,13 +277,14 @@ class NeatGenome:
 
     def mutate(self, rng: np.random.Generator, config: NeatConfig, tracker: InnovationTracker) -> None:
         """Apply NEAT's mutations in place."""
-        # Weights.
+        # Weights (the compiled plan holds copies, so drop it).
         for c in self.connections:
             if rng.random() < config.weight_mutate_rate:
                 if rng.random() < config.weight_perturb_rate:
                     c.weight += float(rng.normal(0.0, config.weight_perturb_scale))
                 else:
                     c.weight = float(rng.uniform(-config.weight_range, config.weight_range))
+        self.invalidate()
         # Re-enable.
         for c in self.connections:
             if not c.enabled and rng.random() < config.enable_rate:
@@ -338,52 +399,15 @@ class NeatGenome:
 
     def forward(self, inputs: np.ndarray) -> np.ndarray:
         """Evaluate the network on one input vector; returns the output node values."""
-        # Depths give the evaluation order.
-        depth = self.depths()
-        # Values.
-        value = {n.id: 0.0 for n in self.nodes}
-        # Inputs and bias.
-        input_nodes = [n for n in self.nodes if n.kind == "input"]
-        for n, x in zip(input_nodes, inputs, strict=False):
-            value[n.id] = float(x)
-        for n in self.nodes:
-            if n.kind == "bias":
-                value[n.id] = 1.0
-        # Incoming enabled connections per node.
-        incoming: dict[int, list[ConnectionGene]] = {}
-        for c in self.connections:
-            if c.enabled:
-                incoming.setdefault(c.dst, []).append(c)
-        # Evaluate in depth order.
-        for n in sorted(self.nodes, key=lambda node: depth[node.id]):
-            if n.kind in ("input", "bias"):
-                continue
-            total = sum(value[c.src] * c.weight for c in incoming.get(n.id, []))
-            value[n.id] = float(ACTIVATIONS[n.activation](np.asarray(total))) if n.kind == "hidden" else total
-        # Outputs in id order.
-        return np.asarray([value[n.id] for n in self.nodes if n.kind == "output"], dtype=float)
+        # Compiled evaluation.
+        _, _, _, output_slots, _ = self._compile()
+        return self._values(inputs)[output_slots]
 
     def activations(self, inputs: np.ndarray) -> dict[int, float]:
-        """Every node's value for one input, for the visualiser."""
-        # Same as forward, but keep everything.
-        depth = self.depths()
-        value = {n.id: 0.0 for n in self.nodes}
-        input_nodes = [n for n in self.nodes if n.kind == "input"]
-        for n, x in zip(input_nodes, inputs, strict=False):
-            value[n.id] = float(x)
-        for n in self.nodes:
-            if n.kind == "bias":
-                value[n.id] = 1.0
-        incoming: dict[int, list[ConnectionGene]] = {}
-        for c in self.connections:
-            if c.enabled:
-                incoming.setdefault(c.dst, []).append(c)
-        for n in sorted(self.nodes, key=lambda node: depth[node.id]):
-            if n.kind in ("input", "bias"):
-                continue
-            total = sum(value[c.src] * c.weight for c in incoming.get(n.id, []))
-            value[n.id] = float(ACTIVATIONS[n.activation](np.asarray(total))) if n.kind == "hidden" else total
-        return value
+        """Every node's value for one input, keyed by node id, for the visualiser."""
+        # Compiled evaluation, mapped back to ids.
+        values = self._values(inputs)
+        return {n.id: float(values[i]) for i, n in enumerate(self.nodes)}
 
     # ------------------------------------------------------------ saving
 
@@ -454,6 +478,7 @@ class NeatBrain(Brain):
             raise ValueError("NEAT weight vector length does not match the genome's connection count")
         for c, w in zip(self.genome_data.connections, genome, strict=False):
             c.weight = float(w)
+        self.genome_data.invalidate()
 
     def describe(self) -> str:
         """A one-line summary."""

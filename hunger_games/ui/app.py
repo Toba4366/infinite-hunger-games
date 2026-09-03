@@ -57,6 +57,9 @@ from hunger_games.training import (
     TrainingConfig,
 )
 
+# The learner-slot rule every trainer uses.
+from hunger_games.training.common import learner_ids
+
 # The canvas.
 from hunger_games.ui.canvas import ArenaCanvas
 
@@ -1442,6 +1445,13 @@ class Dashboard:
             dpg.add_button(
                 label="Load champion into all", callback=lambda: self._file_dialog(self._load_champion, ".json")
             )
+        dpg.add_button(
+            label="Load champion into the learner slots and watch",
+            callback=lambda: self._file_dialog(self._load_champion_learners, ".json"),
+        )
+        self._tip(
+            "Loads a champion.json (for example from results/<run>/runs/<variant>/) into the six starred slots only, everyone else keeps the voting brain, and starts a game: the same matchup the tournament uses."
+        )
         # Advanced settings per method.
         with dpg.collapsing_header(label="Advanced settings", default_open=False):
             self._build_method_settings()
@@ -2595,6 +2605,21 @@ class Dashboard:
         """Load a champion into every tribute."""
         self.session.load_champion_into(path)
         self._rebuild_roster_table()
+
+    def _load_champion_learners(self, path: str) -> None:
+        """Load a champion into the learner slots only and start a game against voting opponents."""
+        # The six evenly spread slots every trainer uses.
+        slots = learner_ids(len(self.session.tributes) or self.session.config.num_players, 6)
+        # Everyone else back to the voting brain.
+        for spec in self.session.tributes:
+            if spec.player_id not in slots:
+                spec.brain_name, spec.genome = "voting", None
+        self.session.load_champion_into(path, slots)
+        self._rebuild_roster_table()
+        self.session.new_game()
+        self._set_speed(8.0)
+        self.session.playing = True
+        dpg.set_value("right_tabs", "tab_network")
 
 
 def launch() -> None:

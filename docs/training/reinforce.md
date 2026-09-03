@@ -8,9 +8,9 @@
 
 This file trains the neural brain by reinforcement learning. The genetic algorithm in [genetic.md](genetic.md) scores whole games. This trainer scores every action: after each tick a learning tribute gets a reward built from the weights in `RewardConfig`, and the policy network is nudged to make well-rewarded actions more likely. A second network, the value network, predicts how much reward is still to come from a state. Subtracting that prediction (the "baseline") makes the learning signal far less noisy. This is REINFORCE with a learned baseline, the simplest actor-critic method, written in plain numpy on top of the `MLP` class.
 
-It also holds `play_rl_episode`, the episode player every other trainer borrows. It puts any learner described by a `LearnerSpec` (neural, NEAT or voting) into the learner slots, plays a game against the config's brain, and returns the experience, the outcomes and the telemetry. The imitation, genetic and NEAT trainers and the method comparison's tournament all score with it.
+It also holds `play_rl_episode`, the episode player every other trainer borrows. It puts any learner described by a `LearnerSpec` (neural, NEAT or voting) into the learner slots, plays a game against the config's brain, and returns the experience, the outcomes, a game-level `learner_won` flag and the telemetry. The imitation, genetic and NEAT trainers and the method comparison's tournament all score with it.
 
-Everything a researcher asks for is logged per epoch in `EpochStats`, and the shared `IterationStats` is appended to `learning_history` with events and the curriculum. The constructor accepts an `initial_genome`, so the policy can start from a network that already has instincts. The recommended flow is to pretrain by imitation ([imitation.md](imitation.md)) and then reinforce from that champion.
+Everything a researcher asks for is logged per epoch in `EpochStats`, and the shared `IterationStats` is appended to `learning_history` with events and the curriculum. Win rates are game-level: a game is won when any learner copy was the victor. The curriculum is promoted on validation wins. The constructor accepts an `initial_genome`, so the policy can start from a network that already has instincts. The recommended flow is to pretrain by imitation ([imitation.md](imitation.md)) and then reinforce from that champion.
 
 ## Concepts you need
 
@@ -27,6 +27,8 @@ Everything a researcher asks for is logged per epoch in `EpochStats`, and the sh
 **Shaping.** A dense reward that pays out for progress toward a goal. `RewardConfig.approach` is one: a bonus per cell moved closer to water while thirsty. It is off by default (`0.0`).
 
 **Greedy versus sampling.** During training the learner samples from the softmax at temperature 1 (`chaos=1.0`). During validation it takes the argmax (`chaos=0.0`).
+
+**Game-level win.** Six learner copies share one game and only one tribute can be the victor. `play_rl_episode` reports `learner_won`, true when any copy won. `win_rate` and `val_win_rate` are the fraction of games with `learner_won`, so they can reach 1.0. The per-copy `won` flags are still in `outcomes`.
 
 **Hooks.** `Game.decision_hooks` are called right after a brain decides; `Game.tick_hooks` at the end of each tick. Most of the reward is computed in a tick hook and attached to the most recent decision.
 
@@ -76,14 +78,16 @@ class EpochStats:
 | `val_return` | Mean total reward per learner episode on the validation seeds, greedy |
 | `train_survival` | Mean ticks survived by learners during collection |
 | `val_survival` | Mean ticks survived on validation |
-| `win_rate` | Fraction of learner episodes that won, training |
-| `val_win_rate` | Same, validation |
+| `win_rate` | Fraction of training games won by a learner copy (game-level, from `_outcome_means`) |
+| `val_win_rate` | Same, validation games |
 | `kill_rate` | Mean kills per learner episode, training |
 | `seconds` | Wall-clock seconds this epoch took |
 | `cumulative_seconds` | Seconds since training started |
 | `genome` | The policy genome after this epoch's update (a copy, `repr=False`) |
 | `telemetry` | Merged telemetry of this epoch's training episodes (`repr=False`) |
 | `showcase` | A `Recording` of this epoch's first training game, or `None` (`repr=False`) |
+
+The field comments in the source still read "fraction of learner episodes that won". The values stored come from `_outcome_means`, which counts games since version 0.7.0.
 
 #### `to_row()`
 
@@ -123,9 +127,19 @@ The reward is added to the latest decision, provided the learner has decided at 
 
 **Play.** `Recorder(game).record_all()` when `record` is on, then `game.run()` either way (a no-op if the recorder already finished the game).
 
-**End of game.** Each learner gets `reward.placement * (n - placement) / (n - 1)` (first place earns the full `2.0`), plus `reward.win` (`5.0`) if it is the sole survivor, added to its last decision.
+**End of game.** Each learner gets `reward.placement * (n - placement) / (n - 1)` (first place earns the full `2.0`), plus `reward.win` (`5.0`) if it is the sole survivor, added to its last decision. Its outcome records `won = 1` in that case.
 
-**Return value.** A dict with `vectors`, `indices` and `rewards` (each `{pid: np.ndarray}`), `outcomes` (`{pid: {"return", "survival", "won", "kills"}}`), `telemetry` (the summary), and `recording` (the `Recording`, or `None`).
+**Return value.** A dict with:
+
+| Key | Contents |
+| --- | --- |
+| `learner_won` | `True` when any learner copy's `won` is 1: the game-level win flag |
+| `vectors`, `indices`, `rewards` | `{pid: np.ndarray}` per learner |
+| `outcomes` | `{pid: {"return", "survival", "won", "kills"}}` per learner copy |
+| `telemetry` | The telemetry summary |
+| `recording` | The `Recording`, or `None` |
+
+`learner_won` is what every trainer and the tournament use for win rates. The per-copy `won` flags stay in `outcomes` for anyone who wants the old per-copy count.
 
 ### `_run_episode_job(args)`
 
@@ -183,13 +197,15 @@ def _apply_curriculum(self) -> None:
 
 With a curriculum, copies the config with `num_players = min(learners_per_game, 24) + curriculum.opponents`. Called at the start of every epoch.
 
-#### `_record_iteration(scores, entropy, mean_length, win_rate, val_score, seconds, extra, telemetry, showcase)`
+#### `_record_iteration(scores, entropy, mean_length, win_rate, val_score, seconds, extra, telemetry, showcase, val_win_rate=0.0)`
 
 ```python
-def _record_iteration(self, scores: list[float], entropy: float, mean_length: float, win_rate: float, val_score: float, seconds: float, extra: dict, telemetry: dict, showcase) -> IterationStats:
+def _record_iteration(self, scores: list[float], entropy: float, mean_length: float, win_rate: float, val_score: float, seconds: float, extra: dict, telemetry: dict, showcase, val_win_rate: float = 0.0) -> IterationStats:
 ```
 
-Appends a unified `IterationStats` with `iteration = len(learning_history)`, the scores and their mean and max, `cumulative_seconds` as the previous record's plus `seconds`, the curriculum's `stage` and `opponents` (or `num_players - 1`), `learner = learner_spec().genome`, and the rest as given. Logs a `"rollout"` event (`iteration I: mean score M, length L ticks, win rate W`), a `"record"` event when the mean beats `best_mean_score`, and calls `curriculum.observe(mean_score)` with a `"curriculum"` event on promotion. Returns the stats.
+Appends a unified `IterationStats` with `iteration = len(learning_history)`, the scores and their mean and max, `win_rate` and `val_win_rate` as given, `cumulative_seconds` as the previous record's plus `seconds`, the curriculum's `stage` and `opponents` (or `num_players - 1`), `learner = learner_spec().genome`, and the rest as given. Logs a `"rollout"` event (`iteration I: mean score M, length L ticks, win rate W`) and a `"record"` event when the mean beats `best_mean_score`.
+
+Then the curriculum. `judged_win` is `val_win_rate` when `rl.validation_games > 0`, else the training `win_rate`. It calls `curriculum.observe(mean_score, judged_win)` and logs a `"curriculum"` event on promotion. With the default `CurriculumConfig` that means the policy climbs a stage when it has won at least half of its greedy validation games over the last five epochs. Returns the stats. `PPOTrainer` inherits this method unchanged.
 
 #### `step(on_progress=None)`
 
@@ -249,7 +265,16 @@ Global-norm clipping: if the combined length of every layer's gradients exceeds 
 def _outcome_means(episodes: list[dict]) -> tuple[float, float, float, float]:
 ```
 
-Means of `return`, `survival`, `won` and `kills` over every learner outcome. Zeros if empty.
+Four means over the episodes, or zeros if there are no outcomes:
+
+| Position | Value | Averaged over |
+| --- | --- | --- |
+| 0 | `return` | Every learner outcome (copies times games) |
+| 1 | `survival` | Every learner outcome |
+| 2 | `learner_won` | Every episode: the game-level win rate |
+| 3 | `kills` | Every learner outcome |
+
+So with 4 episodes and 6 learners the return is a mean of 24 numbers and the win rate is a mean of 4.
 
 #### `step_epoch(on_progress=None)`
 
@@ -261,11 +286,11 @@ def step_epoch(self, on_progress: Callable[[int, int], None] | None = None) -> E
 2. `_apply_curriculum()`.
 3. Draw `episodes_per_epoch` seeds and `_collect` them with `greedy=False`, recording the first when `record_showcase` is on.
 4. `_update(episodes)`.
-5. Training means from `_outcome_means`.
-6. Validation on seeds `validation_seed + i` with `greedy=True` and the updated policy. Never recorded.
+5. Training means from `_outcome_means`: `train_return`, `train_survival`, `win_rate`, `kill_rate`.
+6. Validation on seeds `validation_seed + i` with `greedy=True` and the updated policy. Never recorded. `val_return`, `val_survival` and `val_win_rate` come from `_outcome_means` of those episodes, or zeros when `validation_games` is 0.
 7. If `val_return` beats `best_val_return` (or no best yet), store a copy of the policy as `best_genome`.
 8. Merge the training telemetry, build `EpochStats` (with `showcase = episodes[0].get("recording")`), append, increment `epoch`.
-9. `_record_iteration(scores, entropy, train_survival, win_rate, val_return, seconds, {"policy_loss", "value_loss"}, telemetry, showcase)` with `scores` = every learner's return in every training episode.
+9. `_record_iteration(scores, entropy, train_survival, win_rate, val_return, seconds, {"policy_loss", "value_loss"}, telemetry, showcase, val_win_rate)` with `scores` = every learner's return in every training episode.
 
 The showcase is the game played by the policy *before* this epoch's update; `genome` is the policy *after* it.
 
@@ -329,7 +354,7 @@ from hunger_games.training import ReinforceTrainer, RLConfig
 
 config = SimulationConfig(width=80, height=80, max_days=8)
 trainer = ReinforceTrainer(config, RLConfig(epochs=10, episodes_per_epoch=4, seed=0))
-trainer.run(on_epoch=lambda e: print(e.epoch, round(e.val_return, 2), round(e.entropy, 2)))
+trainer.run(on_epoch=lambda e: print(e.epoch, round(e.val_return, 2), round(e.val_win_rate, 2)))
 print(trainer.events.tail(3))
 trainer.save_champion("policy.json")
 ```
@@ -347,7 +372,7 @@ trainer = ReinforceTrainer(
 trainer.run()
 ```
 
-The policy starts as the student; the value network starts fresh. The first stage is a game of 7 tributes (6 learners and 1 opponent).
+The policy starts as the student; the value network starts fresh. The first stage is a game of 7 tributes (6 learners and 1 opponent). The policy moves to 3 opponents once it has won at least half of its validation games over five epochs, and so on up the ladder. There is no timeout.
 
 **Score any learner with `play_rl_episode`.**
 
@@ -356,7 +381,7 @@ from hunger_games.training.common import LearnerSpec, learner_ids
 from hunger_games.training.reinforce import play_rl_episode
 
 result = play_rl_episode(config, None, trainer.champion_spec(), learner_ids(24, 6), seed=1, greedy=True)
-print([o["return"] for o in result["outcomes"].values()])
+print(result["learner_won"], [o["return"] for o in result["outcomes"].values()])
 ```
 
 A `LearnerSpec("neat", genome_dict)` or `LearnerSpec("voting", eight_genes)` works the same way.
@@ -370,7 +395,7 @@ A `LearnerSpec("neat", genome_dict)` or `LearnerSpec("voting", eight_genes)` wor
 | `entropy` | Spread of the policy's choices (max 2.77) | Slowly down |
 | `train_return` | Mean total reward per learner episode, sampled policy | Up, but noisy |
 | `val_return` | Same on fixed seeds, greedy | Up. Picks the champion |
-| `win_rate`, `val_win_rate` | Fraction of learner episodes that won | Up; with 6 learners per game the ceiling is about 0.17 |
+| `win_rate`, `val_win_rate` | Fraction of games a learner copy won | Up. With 2 validation games the values are 0, 0.5 or 1 per epoch; the curriculum and the comparison average them over a window |
 
 **Shape the reward.** `SimulationConfig(reward=RewardConfig(kill=3.0, death=-1.0))` breeds fighters; `RewardConfig(survive_tick=0.05, kill=0.0)` breeds hiders (see the zombie video's lesson in [ppo.md](ppo.md)).
 
@@ -378,7 +403,8 @@ A `LearnerSpec("neat", genome_dict)` or `LearnerSpec("voting", eight_genes)` wor
 
 ## Gotchas
 
-- **`validation_games=0` freezes the champion.** `val_return` is then always `0.0`, so `champion` stays the epoch-0 policy. Use `history[-1].genome` for the latest policy in that case.
+- **`validation_games=0` freezes the champion.** `val_return` is then always `0.0`, so `champion` stays the epoch-0 policy. Use `history[-1].genome` for the latest policy in that case. The curriculum then falls back to the training win rate.
+- **Validation win rates are coarse.** Two games per epoch give 0, 0.5 or 1. Raise `validation_games` if the curriculum promotes on a lucky pair.
 - **Showcases stay in memory.** Set `record_showcase=False` for long runs on big maps.
 - The showcase is the epoch's *first* training game, played by the sampling policy before the update. It is not a greedy game and not the champion.
 - Advantages are normalised per batch, so `policy_loss` cannot be compared across epochs.

@@ -5,13 +5,15 @@
 
 ## Purpose
 
-`MethodComparison` is the experiment that answers the project's research question, and it runs for hours at full size. This file runs it at the smallest size that still exercises every stage: two variants train for one iteration each, the second warm-starts from the first, both champions fight a two-game tournament, and the run folder gets its table, plots, LaTeX and report. One extra assertion pins down the lines-of-code measure.
+`MethodComparison` is the experiment that answers the project's research question, and it runs for hours at full size. This file runs it at the smallest size that still exercises every stage: two variants train for one iteration each, the second warm-starts from the first, both champions fight a two-game tournament, and the run folder gets its table, plots, LaTeX and report. One extra assertion pins down the lines-of-code measure. A second test checks the extension phase: a variant that misses the win criterion in its first budget keeps training afterwards.
 
 Without this test a change to a trainer's `champion_spec`, to `IterationStats.to_row`, or to the plot names would only show up at the end of a long real run.
 
 ## Concepts you need
 
-**Test discovery.** One `test_*` function. It takes the `tmp_path` fixture so the run folder lands in a temporary directory.
+**Test discovery.** Two `test_*` functions. Each takes the `tmp_path` fixture so the run folder lands in a temporary directory.
+
+**The extension phase.** `ComparisonConfig.extended_iterations` lets variants that have not met the win criterion after `iterations` keep training, with the same trainer, once every variant has had its first budget. See [../research/comparison.md](../research/comparison.md).
 
 **Variant and warm start.** A `Variant` names a method and its settings; `warm_from` names an earlier variant whose champion seeds it. See [../research/comparison.md](../research/comparison.md).
 
@@ -48,6 +50,22 @@ Without this test a change to a trainer's `champion_spec`, to `IterationStats.to
 
 **`assert count_lines("ppo") > count_lines("reinforce")`.** PPO counts `reinforce.py` plus `ppo.py`, so it must be strictly larger. A failure means the file list per method changed or a file went missing.
 
+### `test_comparison_extends_variants_that_miss_the_criterion(tmp_path)`
+
+**Setup.** The same small config and one cold REINFORCE variant (`RLConfig(epochs=1, episodes_per_epoch=1, learners_per_game=4, validation_games=1)`). `ComparisonConfig(name="t", iterations=1, until_win_rate=0.0, win_window=2, extended_iterations=5, tournament_games=1, tournament_learners=4, results_dir=tmp_path)`. The trick is in the numbers: a window of two entries cannot be filled by a one-iteration first budget, so the criterion cannot be met in phase one, and a threshold of zero is met by any full window, so the variant stops on the first extension iteration.
+
+**`folder = comparison.run(on_progress=lambda name, what: messages.append(what))`.** Collects every progress message. Phase one trains one iteration (no criterion), then the extension phase announces itself and trains one more, at which point the window is full and the criterion is met.
+
+**`assert comparison.criterion["reinforce_cold"][0] == 2`.** The criterion was met at the second iteration overall, so the extension counted on from the first budget rather than restarting at one.
+
+**`assert comparison.extended["reinforce_cold"] == 1`** and **`assert comparison.table()["extended_iterations"].tolist() == [1]`.** Exactly one extension iteration ran, and the table reports it. A failure of the first means the extension ran to its cap (the criterion check broke) or never ran; the second means the column was dropped.
+
+**`assert any(what.startswith("extending") for what in messages)`.** The progress callback saw the "extending: the win criterion was not met within the first budget" line.
+
+**`assert (folder / "runs_first_budget").exists() and (folder / "runs").exists()`.** The first-budget snapshot went to its own folder and the final state to `runs/`.
+
+**`assert "extended" in (folder / "report.md").read_text()`.** The criterion table in the report has its extension column and note.
+
 ## How to use it / experiment
 
 - Add a third variant, for example `Variant("ppo_warm", "ppo", PPOConfig(epochs=1, episodes_per_epoch=1, learners_per_game=4, validation_games=1, update_epochs=1), warm_from="imitation")`, to check that the PPO subclass fits the same contract.
@@ -59,4 +77,5 @@ Without this test a change to a trainer's `champion_spec`, to `IterationStats.to
 - **A warm start that silently fails still passes this test.** The assertions check outputs, not that the REINFORCE policy began as the imitation champion. See `test_warm_starts_begin_from_the_given_genome` in [test_imitation.md](test_imitation.md) for that.
 - **`results_dir` is a `Path` here** although the dataclass types it as `str`; `make_run_dir` accepts both.
 - **Four learners on 24 tributes** sit in slots 0, 6, 12 and 18, so the tournament means are over 2 games times 4 learners, 8 learner episodes.
+- **The extension test relies on `until_win_rate=0.0`.** A threshold of zero is always met once the window is full, which is what makes the test deterministic; a positive threshold would depend on whether the tiny policy happened to win.
 - **The test writes real PNGs**, so a matplotlib backend problem shows up here as a failure rather than a skipped chart.

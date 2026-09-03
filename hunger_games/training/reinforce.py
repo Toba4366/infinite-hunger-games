@@ -294,8 +294,9 @@ def play_rl_episode(
             "won": int(player.alive and len(game.alive_players) == 1),
             "kills": player.kills,
         }
-    # Package.
+    # Package (learner_won: did any learner copy win this game?).
     return {
+        "learner_won": bool(any(o["won"] for o in outcomes.values())),
         "vectors": {pid: np.asarray(v) for pid, v in vectors.items()},
         "indices": {pid: np.asarray(v, dtype=int) for pid, v in indices.items()},
         "rewards": {pid: np.asarray(v, dtype=float) for pid, v in rewards.items()},
@@ -410,6 +411,7 @@ class ReinforceTrainer:
         extra: dict,
         telemetry: dict,
         showcase,
+        val_win_rate: float = 0.0,
     ) -> IterationStats:
         """Append a unified IterationStats, log events, and advance the curriculum."""
         # Mean.
@@ -427,6 +429,7 @@ class ReinforceTrainer:
             mean_length=mean_length,
             win_rate=win_rate,
             val_score=val_score,
+            val_win_rate=val_win_rate,
             seconds=seconds,
             cumulative_seconds=(self.learning_history[-1].cumulative_seconds if self.learning_history else 0.0)
             + seconds,
@@ -447,8 +450,9 @@ class ReinforceTrainer:
         if mean_score > self.best_mean_score:
             self.best_mean_score = mean_score
             self.events.add("record", f"new best mean score {mean_score:.2f}")
-        # Curriculum.
-        if self.curriculum is not None and self.curriculum.observe(mean_score):
+        # Curriculum (promotion is judged on the validation games when there are any, else on training games).
+        judged_win = val_win_rate if self.rl.validation_games > 0 else win_rate
+        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win):
             self.events.add(
                 "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
             )
@@ -599,17 +603,17 @@ class ReinforceTrainer:
 
     @staticmethod
     def _outcome_means(episodes: list[dict]) -> tuple[float, float, float, float]:
-        """Mean return, survival, win rate and kill rate over every learner in every episode."""
+        """Mean return, survival, game-level win rate and kill rate over the episodes."""
         # All outcomes.
         outcomes = [o for episode in episodes for o in episode["outcomes"].values()]
         # Empty.
         if not outcomes:
             return 0.0, 0.0, 0.0, 0.0
-        # Means.
+        # Means (a game is won when any learner copy was the victor).
         return (
             float(np.mean([o["return"] for o in outcomes])),
             float(np.mean([o["survival"] for o in outcomes])),
-            float(np.mean([o["won"] for o in outcomes])),
+            float(np.mean([episode.get("learner_won", False) for episode in episodes])),
             float(np.mean([o["kills"] for o in outcomes])),
         )
 
@@ -679,6 +683,7 @@ class ReinforceTrainer:
             {"policy_loss": policy_loss, "value_loss": value_loss},
             telemetry,
             stats.showcase,
+            val_win_rate,
         )
         # Done.
         return stats

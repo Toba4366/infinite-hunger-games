@@ -10,7 +10,7 @@ Five training methods live in this package: imitation, the genetic algorithm, NE
 
 - `IterationStats`, the one record every method fills in after each iteration. The dashboard's graphs, `learning.json` and the shared learning-curve plots all read this shape.
 - `EventLog`, the timestamped one-line messages behind the dashboard's event monitor.
-- `CurriculumConfig` and `Curriculum`, which grow the number of opponents as the learner improves. This is modelled on the zombie video's ladder, where the agent faced 1, then 2, 4, 8 and 16 zombies.
+- `CurriculumConfig` and `Curriculum`, which grow the number of opponents as the learner improves. This is modelled on the zombie video's ladder, where the agent faced 1, then 2, 4, 8 and 16 zombies. Since version 0.7.0 a stage is cleared by winning games, not by scoring points, and there is no timeout by default.
 - `SystemMonitor`, CPU and memory readings for the dashboard.
 - `LearnerSpec` and `build_learner`, a small description of a learner brain that a worker process can rebuild.
 - `learner_ids`, the rule for which tribute slots the learner takes.
@@ -25,7 +25,9 @@ Every method here trains one learner network against opponents that use the voti
 
 **Entropy.** `H = -sum p(a) log p(a)` in nats. High means the learner is still exploring, low means it is confident. A uniform choice over the 16-item menu has `H = ln 16 = 2.77`.
 
-**Curriculum.** Start easy and get harder. Here "easy" means few opponents. The learner is promoted to the next stage when its recent mean score is good enough, or when it has been stuck long enough.
+**Win rate, game-level.** The learner plays several copies of itself in one game (6 by default). A game has one victor, so at most one copy can win it. A game counts as won when any learner copy was the victor. `win_rate` and `val_win_rate` are fractions of games won, not fractions of learner copies that won. The old per-copy count capped six copies at one sixth; the game-level rate can reach 1.0.
+
+**Curriculum.** Start easy and get harder. Here "easy" means few opponents. By default the learner is promoted when it has won at least half of its recent validation games. It can instead be judged on mean score. A timeout can be added, but there is none by default: the learner has to earn each stage.
 
 **Worker processes.** With `workers > 1` the trainers play games in separate processes. A process cannot receive a live `Brain` object cheaply, so it receives a `LearnerSpec` (a kind plus a genome) and rebuilds the brain with `build_learner`.
 
@@ -50,16 +52,19 @@ One iteration of any method, in the same shape for every method.
 | `best_score` | `float` | required | The best of them |
 | `entropy` | `float` | required | Policy entropy in nats |
 | `mean_length` | `float` | required | Mean ticks the learner survived this iteration |
-| `win_rate` | `float` | required | Fraction of learner episodes that won |
+| `win_rate` | `float` | required | Fraction of training games a learner copy won (game-level: one victor per game) |
 | `val_score` | `float` | required | Mean score in the greedy validation games on fixed seeds |
 | `seconds` | `float` | required | Seconds this iteration took |
 | `cumulative_seconds` | `float` | required | Seconds since training started |
+| `val_win_rate` | `float` | `0.0` | Fraction of validation games a learner copy won (game-level) |
 | `stage` | `int` | `0` | Curriculum stage index |
 | `opponents` | `int` | `23` | Opponents faced |
 | `extra` | `dict` | `{}` | Method-specific numbers (losses, species counts, accuracy, and so on) |
 | `learner` | `Any` | `None` (`repr=False`) | The learner after this iteration: a genome array for neural brains, a NEAT genome dictionary for NEAT |
 | `telemetry` | `dict` | `{}` (`repr=False`) | Behaviour telemetry summary of the learner's episodes |
 | `showcase` | `Recording | None` | `None` (`repr=False`) | A recording of one real episode from this iteration (the dashboard's training feed) |
+
+`val_win_rate` has a default so older code that builds the record by position still works. Every trainer fills it.
 
 What goes in `extra` depends on the trainer:
 
@@ -76,7 +81,7 @@ What goes in `extra` depends on the trainer:
 def to_row(self) -> dict:
 ```
 
-A JSON-friendly dictionary without the big arrays. It walks `self.__dict__` and skips `learner`, `telemetry`, `showcase`, `scores` and `extra`. Then it flattens the extras in with an `extra_` prefix, so a NEAT row has `extra_species` and `extra_hidden_nodes`, and an RL row has `extra_policy_loss`. `save_run` writes these rows to `learning.json`, and `learning_curve_plots` reads them.
+A JSON-friendly dictionary without the big arrays. It walks `self.__dict__` and skips `learner`, `telemetry`, `showcase`, `scores` and `extra`. Then it flattens the extras in with an `extra_` prefix, so a NEAT row has `extra_species` and `extra_hidden_nodes`, and an RL row has `extra_policy_loss`. `val_win_rate` is a plain field, so it is in every row. `save_run` writes these rows to `learning.json`, `learning_curve_plots` reads them, and the method comparison reads `val_win_rate` from them for its win criterion and its win-rate charts.
 
 ### `EventLog`
 
@@ -123,11 +128,13 @@ class CurriculumConfig:
 | --- | --- | --- |
 | `enabled` | `True` | Whether the curriculum is on |
 | `opponents` | `(1, 3, 7, 11, 23)` | Opponents per stage (the learner's own copies are added on top) |
-| `threshold` | `3.0` | Promote when the mean score of the last `window` iterations reaches this |
+| `promote_on` | `"win_rate"` | What promotion is judged on: `"win_rate"` (the learner must actually win games) or `"score"` |
+| `win_threshold` | `0.5` | With `promote_on="win_rate"`, promote when the last `window` win rates average at least this (a majority of games) |
+| `threshold` | `3.0` | With `promote_on="score"`, promote when the last `window` mean scores average at least this |
 | `window` | `5` | Iterations averaged for the promotion test |
-| `max_iterations_per_stage` | `40` | Promote anyway after this many iterations in a stage |
+| `max_iterations_per_stage` | `0` | Promote anyway after this many iterations in a stage; `0` means never |
 
-Design reasoning: the zombie video's ladder was 1, 2, 4, 8, 16 zombies. This arena has 24 tributes by default, and the learner keeps 6 copies of itself in every game, so the ladder here is 1, 3, 7, 11 and 23 opponents. The last stage is the full default roster of 23 opponents.
+Design reasoning: the zombie video's ladder was 1, 2, 4, 8, 16 zombies. This arena has 24 tributes by default, and the learner keeps 6 copies of itself in every game, so the ladder here is 1, 3, 7, 11 and 23 opponents. The last stage is the full default roster of 23 opponents. Judging on wins rather than score means a stage is cleared only when the learner beats that field, not when it collects points while losing. The default of no timeout means a learner that never wins stays on stage 0; that is a result, not a failure of the curriculum.
 
 ### `Curriculum`
 
@@ -143,7 +150,7 @@ Tracks the current stage and decides when to promote.
 def __init__(self, config: CurriculumConfig) -> None:
 ```
 
-Starts at `stage = 0` with `iterations_in_stage = 0` and an empty `recent` list of mean scores.
+Starts at `stage = 0` with `iterations_in_stage = 0` and an empty `recent` list. `recent` holds the judged metric of the recent iterations in this stage: win rates with `promote_on="win_rate"`, mean scores with `promote_on="score"`.
 
 #### `opponents` (property)
 
@@ -161,32 +168,45 @@ Opponents in the current stage. When the curriculum is off, it returns the last 
 def finished(self) -> bool:
 ```
 
-`True` when the curriculum is off or `stage` is the last index. A finished curriculum never promotes again.
+`True` when the curriculum is off or `stage` is the last index. A finished curriculum never promotes again. The method comparison reads this to decide whether a variant is at the final stage before it tests the win criterion.
 
-#### `observe(mean_score)`
+#### `observe(mean_score, win_rate=0.0)`
 
 ```python
-def observe(self, mean_score: float) -> bool:
+def observe(self, mean_score: float, win_rate: float = 0.0) -> bool:
 ```
 
-Records one iteration's mean score. Returns `True` when the learner is promoted. The rule:
+Records one iteration's mean score and win rate. Returns `True` when the learner is promoted. The rule:
 
 1. If `finished`, return `False` without counting anything.
-2. Add one to `iterations_in_stage`. Append `mean_score` to `recent` and keep only the last `window` entries.
-3. `good_enough` is true when `recent` has at least `window` entries and their mean is at least `threshold`.
-4. `timed_out` is true when `iterations_in_stage` has reached `max_iterations_per_stage`.
+2. Add one to `iterations_in_stage`. Append the judged metric to `recent` (`win_rate` with `promote_on="win_rate"`, else `mean_score`) and keep only the last `window` entries.
+3. `bar` is `win_threshold` with `promote_on="win_rate"`, else `threshold`. `good_enough` is true when `recent` has at least `window` entries and their mean is at least `bar`.
+4. `timed_out` is true when `max_iterations_per_stage` is greater than 0 and `iterations_in_stage` has reached it. With the default `0` it is never true.
 5. If either holds, add one to `stage`, reset `iterations_in_stage` to 0 and `recent` to empty, and return `True`.
 
-Worked example with `opponents=(1, 3, 7)`, `threshold=1.0`, `window=2`, `max_iterations_per_stage=4` (the settings `tests/test_methods.py` uses):
+The metric that is not being judged is ignored. With the default `promote_on="win_rate"`, `mean_score` plays no part in promotion.
+
+Worked example with `opponents=(1, 3, 7)`, `win_threshold=0.5`, `window=2`, `max_iterations_per_stage=4` (the settings `tests/test_methods.py` uses):
 
 | Call | `recent` after | `iterations_in_stage` | Result |
 | --- | --- | --- | --- |
-| `observe(0.0)` | `[0.0]` | 1 | `False` (only one score in the window) |
-| `observe(2.0)` | `[0.0, 2.0]`, mean 1.0 | 2 | `True`, now 3 opponents |
-| `observe(0.0)` three times | `[0.0, 0.0]` | 3 | `False` each time |
-| `observe(0.0)` | `[0.0, 0.0]` | 4 | `True` by timeout, now 7 opponents, `finished` |
+| `observe(0.0, win_rate=0.0)` | `[0.0]` | 1 | `False` (only one entry in the window) |
+| `observe(0.0, win_rate=1.0)` | `[0.0, 1.0]`, mean 0.5 | 2 | `True`, now 3 opponents |
+| `observe(9.0, win_rate=0.0)` three times | `[0.0, 0.0]` | 3 | `False` each time; the high score is ignored |
+| `observe(9.0, win_rate=0.0)` | `[0.0, 0.0]` | 4 | `True` by timeout, now 7 opponents, `finished` |
 
-The trainers call `observe` once per iteration with the iteration's `mean_score`, and log a `"curriculum"` event when it returns `True`. Note that the threshold is compared directly with the mean score; there is no per-stage scaling in the code.
+Two more cases from the same test. With `max_iterations_per_stage=0`, fifty calls of `observe(0.0, win_rate=0.0)` never promote. With `promote_on="score"`, `threshold=1.0` and `window=1`, one call of `observe(2.0, win_rate=0.0)` promotes at once.
+
+Who passes what:
+
+| Trainer | Call after each iteration |
+| --- | --- |
+| `ReinforceTrainer`, `PPOTrainer` | `observe(mean_score, val_win_rate)` when `validation_games > 0`, else `observe(mean_score, win_rate)` |
+| `NeatTrainer` | The same rule with its own `validation_games` |
+| `GeneticTrainer` | `observe(mean_score, val_win_rate)` when `validation_games > 0`, else `observe(mean_score, win_rate)` |
+| `ImitationTrainer` | Never calls `observe` |
+
+Every caller logs a `"curriculum"` event when `observe` returns `True`. Note that the thresholds are compared directly with the mean of the window; there is no per-stage scaling in the code.
 
 ### `SystemMonitor`
 
@@ -280,7 +300,7 @@ from hunger_games.training import PPOConfig, PPOTrainer
 trainer = PPOTrainer(SimulationConfig(width=60, height=60, max_days=4), PPOConfig(epochs=3, seed=0))
 for _ in range(3):
     stats = trainer.step()
-    print(stats.iteration, round(stats.mean_score, 2), round(stats.entropy, 2), stats.opponents)
+    print(stats.iteration, round(stats.mean_score, 2), round(stats.val_win_rate, 2), stats.opponents)
 print(trainer.events.tail(5))
 ```
 
@@ -291,7 +311,7 @@ The same loop works for `ImitationTrainer`, `GeneticTrainer`, `NeatTrainer` and 
 ```python
 from hunger_games.training import Curriculum, CurriculumConfig, ReinforceTrainer, RLConfig
 
-curriculum = Curriculum(CurriculumConfig(opponents=(1, 3, 7, 11, 23), threshold=3.0, window=5))
+curriculum = Curriculum(CurriculumConfig(opponents=(1, 3, 7, 11, 23), win_threshold=0.5, window=5))
 trainer = ReinforceTrainer(config, RLConfig(epochs=100, seed=0), curriculum=curriculum)
 trainer.run()
 print([s.opponents for s in trainer.learning_history])
@@ -299,7 +319,7 @@ print([s.opponents for s in trainer.learning_history])
 
 Each trainer's `_apply_curriculum` resizes the roster before every iteration to `min(learners_per_game, 24) + curriculum.opponents` players. With 6 learners the stages are games of 7, 9, 13, 17 and 29 tributes. The `curriculum.png` chart in a run folder shows the ladder.
 
-**Tune the promotion rule.** A lower `threshold` or a shorter `window` promotes sooner. `max_iterations_per_stage` is the safety net: if the learner never clears the threshold, it still moves on. Set it high (say 200) if you want the threshold to be the only way up.
+**Tune the promotion rule.** A lower `win_threshold` or a shorter `window` promotes sooner. `promote_on="score"` with `threshold` brings back the old score-based rule. `max_iterations_per_stage` is an optional safety net: set it above 0 and a stuck learner still moves on after that many iterations. Leave it at 0 when the point of the experiment is whether the learner can earn each stage.
 
 **Rebuild a learner by hand.**
 
@@ -316,6 +336,9 @@ print(brain.describe())
 ## Gotchas
 
 - `to_row()` drops `scores` and `extra` as fields but adds the extras back as `extra_*` keys. The per-episode scores are only in memory; `learning.json` has their mean and best.
+- Every trainer that applies the curriculum (genetic, neat, reinforce, ppo) passes the validation win rate to `observe` when it plays validation games, so all of them can be promoted by winning; with `validation_games=0` the training-game win rate is used instead.
+- With the default `max_iterations_per_stage=0` there is no timeout at all. A learner that never wins half of its validation games stays on stage 0 for the whole run, and `finished` stays `False`. The method comparison's win criterion is only tested at the final stage, so such a variant runs its full iteration budget.
+- The judged win rate comes from validation games when the trainer has any (`validation_games > 0`), else from training games. With `validation_games=2` a single win moves the window's mean by 0.1 (one of two games, averaged over five iterations), so the win rate is coarse. Raise `validation_games` for a steadier signal.
 - The curriculum only counts when `finished` is false. With `enabled=False`, `opponents` is the last stage and `observe` always returns `False`.
 - A curriculum object holds state. Make a fresh `Curriculum` for every trainer; sharing one between two trainers would let one promote the other.
 - `IterationStats.opponents` defaults to 23, but the trainers always pass a value: the curriculum's `opponents`, or `num_players - 1` without a curriculum. `ImitationTrainer` always records `stage=0` and `num_players - 1` opponents, because it does not apply the curriculum to its roster.

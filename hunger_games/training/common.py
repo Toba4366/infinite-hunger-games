@@ -49,7 +49,7 @@ class IterationStats:
     entropy: float
     # Mean ticks the learner survived this iteration.
     mean_length: float
-    # Fraction of learner episodes that won.
+    # Fraction of training games a learner copy won (game-level: one victor per game).
     win_rate: float
     # Mean score in the greedy validation games on fixed seeds.
     val_score: float
@@ -57,6 +57,8 @@ class IterationStats:
     seconds: float
     # Seconds since training started.
     cumulative_seconds: float
+    # Fraction of validation games a learner copy won (game-level: one victor per game).
+    val_win_rate: float = 0.0
     # Curriculum stage index and the number of opponents in it.
     stage: int = 0
     # Opponents faced.
@@ -118,12 +120,16 @@ class CurriculumConfig:
     enabled: bool = True
     # Opponents per stage (the learner's own copies are added on top).
     opponents: tuple[int, ...] = (1, 3, 7, 11, 23)
-    # Promote when the mean score of the last `window` iterations reaches this (per stage, scaled by the win bonus).
+    # What promotion is judged on: "win_rate" (the learner must actually win games) or "score".
+    promote_on: str = "win_rate"
+    # Promote when the last `window` iterations average at least this win rate (a majority of games by default).
+    win_threshold: float = 0.5
+    # Or, when judging on score, at least this mean score.
     threshold: float = 3.0
     # Iterations averaged for the promotion test.
     window: int = 5
-    # Promote anyway after this many iterations in a stage.
-    max_iterations_per_stage: int = 40
+    # Promote anyway after this many iterations in a stage; 0 means never (the learner must earn it).
+    max_iterations_per_stage: int = 0
 
 
 class Curriculum:
@@ -155,20 +161,21 @@ class Curriculum:
         # Last stage reached.
         return not self.config.enabled or self.stage >= len(self.config.opponents) - 1
 
-    def observe(self, mean_score: float) -> bool:
-        """Record an iteration's mean score; returns True when the learner is promoted."""
+    def observe(self, mean_score: float, win_rate: float = 0.0) -> bool:
+        """Record an iteration's mean score and win rate; returns True when the learner is promoted."""
         # Off or done.
         if self.finished:
             return False
         # Count.
         self.iterations_in_stage += 1
-        # Remember.
-        self.recent.append(mean_score)
+        # Remember the judged metric.
+        self.recent.append(win_rate if self.config.promote_on == "win_rate" else mean_score)
         self.recent = self.recent[-self.config.window :]
         # Ready?
-        good_enough = len(self.recent) >= self.config.window and float(np.mean(self.recent)) >= self.config.threshold
-        # Or stuck long enough.
-        timed_out = self.iterations_in_stage >= self.config.max_iterations_per_stage
+        bar = self.config.win_threshold if self.config.promote_on == "win_rate" else self.config.threshold
+        good_enough = len(self.recent) >= self.config.window and float(np.mean(self.recent)) >= bar
+        # Or stuck long enough (never, when the limit is 0).
+        timed_out = 0 < self.config.max_iterations_per_stage <= self.iterations_in_stage
         # Promote.
         if good_enough or timed_out:
             self.stage += 1

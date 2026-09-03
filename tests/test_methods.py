@@ -55,14 +55,20 @@ def test_neat_genome_grows_and_round_trips():
     assert "NEAT" in brain.describe()
 
 
-def test_curriculum_promotes_on_score_or_timeout():
-    """The learner moves up a stage when its recent mean score clears the threshold, or after enough tries."""
-    curriculum = Curriculum(CurriculumConfig(opponents=(1, 3, 7), threshold=1.0, window=2, max_iterations_per_stage=4))
+def test_curriculum_promotes_on_wins_or_timeout():
+    """The learner moves up a stage when it wins enough recent games, or after enough tries when a limit is set."""
+    curriculum = Curriculum(
+        CurriculumConfig(opponents=(1, 3, 7), win_threshold=0.5, window=2, max_iterations_per_stage=4)
+    )
     assert curriculum.opponents == 1
-    assert not curriculum.observe(0.0)
-    assert curriculum.observe(2.0) is True and curriculum.opponents == 3
-    assert not any(curriculum.observe(0.0) for _ in range(3))
-    assert curriculum.observe(0.0) is True and curriculum.opponents == 7 and curriculum.finished
+    assert not curriculum.observe(0.0, win_rate=0.0)
+    assert curriculum.observe(0.0, win_rate=1.0) is True and curriculum.opponents == 3
+    assert not any(curriculum.observe(9.0, win_rate=0.0) for _ in range(3))
+    assert curriculum.observe(9.0, win_rate=0.0) is True and curriculum.opponents == 7 and curriculum.finished
+    never = Curriculum(CurriculumConfig(opponents=(1, 3), win_threshold=0.5, window=1, max_iterations_per_stage=0))
+    assert not any(never.observe(0.0, win_rate=0.0) for _ in range(50))
+    by_score = Curriculum(CurriculumConfig(opponents=(1, 3), promote_on="score", threshold=1.0, window=1))
+    assert by_score.observe(2.0, win_rate=0.0) is True
     assert Curriculum(CurriculumConfig(enabled=False)).opponents == 23
 
 
@@ -108,7 +114,9 @@ def test_every_method_produces_the_shared_iteration_stats(tmp_path):
 
 def test_genetic_curriculum_and_winners_only_demonstrations():
     """The GA sizes its roster from the curriculum, and imitation can keep winners' decisions only."""
-    curriculum = Curriculum(CurriculumConfig(opponents=(2, 5), threshold=99.0, window=1, max_iterations_per_stage=1))
+    curriculum = Curriculum(
+        CurriculumConfig(opponents=(2, 5), win_threshold=99.0, window=1, max_iterations_per_stage=1)
+    )
     trainer = GeneticTrainer(
         small(),
         TrainingConfig(

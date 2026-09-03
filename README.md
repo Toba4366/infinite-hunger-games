@@ -58,7 +58,7 @@ the world regenerate the arena at once.
 | Tributes | Podium presets (edge ring, around cornucopia, random, two sides) or drag tributes. Rename, change district, sex, scores, brain, grant a weapon, food, medkits or sponsor favour, set starting bars. |
 | Brains | Default brain, and the neural network: the number of hidden layers, the nodes in each, activation, every initializer, with the 50 inputs and 16 outputs listed. |
 | Play | Speed presets, back-to-back games, replays, GIF export. |
-| Train | One network trained against the voting brain, marked with a gold star on the arena. Five methods with one-line help: imitation, genetic, NEAT, REINFORCE, PPO. Warm starts, an opponent curriculum (1, 3, 7, 11, 23), and a dashboard modelled on the zombie video: latest-score bars, an event monitor, average score, entropy and game-length graphs, learning statistics with a rollout bar, CPU and memory, Start, Pause, Stop, Reset and Watch agent, plus a training feed that replays a real training game every iteration or lets the newest learner play live. |
+| Train | One network trained against the voting brain, marked with a gold star on the arena. Five methods with one-line help: imitation, genetic, NEAT, REINFORCE, PPO. Warm starts, an opponent curriculum (1, 3, 7, 11, 23, promoted only by winning), and a dashboard modelled on the zombie video: latest-score bars, an event monitor, average score, entropy and game-length graphs, learning statistics with a rollout bar, CPU and memory, Start, Pause, Stop, Reset and Watch agent, plus a training feed that replays a real training game every iteration or lets the newest learner play live. |
 | Research | Parameter sweeps over any setting, and one-PNG-per-chart exports of the behaviour of every game watched. |
 
 The right panel's Network tab draws the selected neural tribute's network as
@@ -97,7 +97,9 @@ Headless: prefix commands with `MPLBACKEND=Agg`.
 ## Research scripts and run folders
 
 ```bash
-python experiments/run_comparison.py --iterations 20 --games 75 --workers 4              # all five methods, then the tournament
+python experiments/run_comparison.py --methods imitation,genetic,neat,reinforce,ppo --pairs --curriculum \
+    --iterations 150 --until-win 0.5 --extend-iterations 1000 --extend-hours 2 \
+    --games 75 --workers 6           # the full experiment: cold and warm, train until it wins, slow starters get more time
 python experiments/run_comparison.py --methods imitation,ppo --warm --curriculum --iterations 30
 python experiments/run_comparison.py --methods ppo --sizes 16,64x32,128x64                # network sizes
 python experiments/run_comparison.py --methods ppo --initializers xavier_uniform,he_uniform,zeros
@@ -106,8 +108,17 @@ python experiments/run_rl.py --epochs 30 --episodes 4 --learners 6 --workers 4
 python experiments/run_sweep.py --parameter chaos --values 0,0.25,0.5,0.75,1 --games 50 --workers 4
 ```
 
-The comparison trains every variant under the same budget, then every
-champion plays the same 75 seeded games against voting opponents. Its folder
+The comparison trains every variant until it wins a majority of its
+validation games over five iterations at the final curriculum stage (or the
+iteration cap), recording how many iterations and seconds that took, then
+every champion plays the same 75 seeded games against voting opponents. A
+game counts as won when a copy of the learner is the victor. `--pairs`
+trains a cold and a warm-started variant of every method so the value of
+imitation pretraining can be measured. `--extend-iterations` and
+`--extend-hours` give any variant that misses the criterion a second, longer
+budget after the quick ones have finished, so a slow cold start is measured
+for how long it really needs rather than cut off, and its final network
+still fights in the tournament. Its folder
 holds `results.csv`, a LaTeX table, overlaid learning curves against
 iterations and against wall-clock time, tournament charts, lines-of-code
 and training-time charts, each variant's own run folder, and a generated
@@ -276,7 +287,7 @@ chart. All five accept a warm start and the opponent curriculum.
 | Logged per step | train and validation loss and accuracy, validation survival and win rate, seconds, telemetry | best, mean, worst and validation fitness, seconds, telemetry | policy and value loss, entropy, train and validation return, survival, win and kill rate, seconds, telemetry |
 | Warm start | from a champion, optional | population seeded with the champion and close relatives | policy starts from the champion |
 
-NEAT (`NeatTrainerConfig`): population 48, 30 generations, 6 learner copies per game, target 8 species, add-node 0.03, add-connection 0.08, stagnation 15. PPO (`PPOConfig`): REINFORCE's settings plus clip 0.2, 4 passes per batch, minibatch 256, GAE lambda 0.95. Curriculum (`CurriculumConfig`): opponents 1, 3, 7, 11, 23, promoted when the last 5 iterations average a score of 3 or after 40 iterations.
+NEAT (`NeatTrainerConfig`): population 48, 30 generations, 6 learner copies per game, target 8 species, add-node 0.03, add-connection 0.08, stagnation 15. PPO (`PPOConfig`): REINFORCE's settings plus clip 0.2, 4 passes per batch, minibatch 256, GAE lambda 0.95. Curriculum (`CurriculumConfig`): opponents 1, 3, 7, 11, 23, promoted only when the learner has won at least half of its last 5 iterations' validation games; there is no timeout unless you set one.
 
 Why imitation comes first: a fresh network chooses "drink" one time in
 sixteen even while standing in water, so every untrained tribute dies of

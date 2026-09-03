@@ -12,6 +12,8 @@ Every new connection gets an innovation number from a global counter. That numbe
 
 The network is kept feed-forward. A connection is only allowed from a node of lower depth to one of higher depth, so evaluation is a single pass in depth order with no cycles.
 
+Evaluation is compiled. The first forward pass turns the gene lists into a small evaluation plan of numpy index and weight arrays, cached on the genome. Every later pass is a handful of dot products instead of a Python loop over hundreds of genes. Measured on a minimal genome, a forward pass takes about 30 microseconds; the old gene-by-gene loop took several milliseconds. The plan is dropped by `invalidate()` whenever the structure or the weights change.
+
 This file holds the genome and a `NeatBrain` that wraps it. The evolution loop (species, fitness sharing, reproduction) is in [../training/neat.md](../training/neat.md).
 
 ## Concepts you need
@@ -22,7 +24,9 @@ This file holds the genome and a `NeatBrain` that wraps it. The evolution loop (
 
 **Depth.** Inputs and the bias sit at depth 0. Every other node sits one deeper than its deepest enabled source. Depth gives the evaluation order and the feed-forward rule: new connections must go from lower depth to higher.
 
-**Disabled connections.** Splitting a connection disables it rather than deleting it. The gene stays in the genome so crossover can still line it up, and a later mutation can re-enable it.
+**Evaluation plan.** A compiled form of the genome for fast forward passes. For every non-input node in depth order it stores the indices of the node's enabled sources and their weights as numpy arrays, plus the node's kind and activation function. It also stores where the inputs, the bias and the outputs sit. Because the plan copies the weights, it must be rebuilt after any weight change, not only after structural ones.
+
+**Disabled connections.** Splitting a connection disables it rather than deleting it. The gene stays in the genome so crossover can still line it up, and a later mutation can re-enable it. Disabled connections are left out of the plan.
 
 **Compatibility distance.** A number that says how different two genomes are: excess and disjoint genes count, and so does the average weight difference of matching genes. Genomes closer than a threshold belong to the same species.
 
@@ -136,6 +140,9 @@ class NeatGenome:
 | `fitness` | `float` | `0.0` | Fitness after evaluation |
 | `species` | `int` | `-1` | Which species it belongs to |
 | `_depths` | `dict[int, int] | None` | `None` (`repr=False`, `compare=False`) | Cached node depths, computed on demand |
+| `_plan` | `tuple | None` | `None` (`repr=False`, `compare=False`) | Cached evaluation plan, computed on demand by `_compile` |
+
+Both caches are excluded from `repr` and from equality, so two genomes with the same genes compare equal whether or not one has been evaluated.
 
 #### `minimal(inputs, outputs, rng, config, tracker)` (class method)
 
@@ -154,7 +161,7 @@ With `VECTOR_SIZE = 50` and `MENU_SIZE = 16`: inputs are nodes 0 to 49, the bias
 def copy(self) -> "NeatGenome":
 ```
 
-A deep copy: new `NodeGene` and `ConnectionGene` objects, the same `fitness` and `species`. The depth cache is not copied.
+A deep copy: new `NodeGene` and `ConnectionGene` objects, the same `fitness` and `species`. Neither cache is copied; the copy compiles its own plan on its first forward pass.
 
 #### `depths()`
 
@@ -172,7 +179,40 @@ A hidden node whose incoming connections are all disabled has depth 0. That case
 def invalidate(self) -> None:
 ```
 
-Forgets the cached depths. Called after every structural change (a new node, a new connection, a re-enabled connection).
+Forgets the cached depths and the evaluation plan. Called after every structural change (a new node, a new connection, a re-enabled connection) and after every weight change, because the plan holds copies of the weights. Inside this file `mutate`, `_add_node` and `_add_connection` call it; `NeatBrain.set_genome` calls it after writing new weights.
+
+#### `_compile()`
+
+```python
+def _compile(self) -> tuple:
+```
+
+Turns the genome into arrays so a forward pass is a few numpy dot products instead of Python loops. Returns the cached `_plan` if there is one. Otherwise:
+
+1. `index` maps every node id to its position in `nodes`. `depth = self.depths()`.
+2. `incoming` groups the enabled connections by destination node id. Disabled connections are skipped here, so they never take part in evaluation.
+3. `steps` is built by walking the nodes sorted by depth and skipping inputs and the bias. Each step is a tuple `(slot, sources, weights, kind, activation)`: the node's position, an `int` array of its sources' positions, a `float` array of the matching weights, the node's kind, and the function `ACTIVATIONS[node.activation]`. A node with no enabled sources gets two empty arrays.
+4. `input_slots`, `bias_slots` and `output_slots` are `int` arrays of the positions of the input, bias and output nodes, in node-list order.
+5. The plan `(steps, input_slots, bias_slots, output_slots, len(nodes))` is cached in `_plan` and returned.
+
+Python's sort is stable, so nodes at the same depth keep their list order. That order does not matter for the result, because a connection always goes from a lower depth to a higher one.
+
+For a minimal genome the plan is 16 steps (one per output), each with 51 sources.
+
+#### `_values(inputs)`
+
+```python
+def _values(self, inputs: np.ndarray) -> np.ndarray:
+```
+
+Every node's value for one input vector, using the compiled plan:
+
+1. Take the plan from `_compile()` and make a zero array of one value per node.
+2. Write the inputs into the input slots: `values[input_slots[:len(inputs)]] = inputs[:len(input_slots)]`. Extra inputs are ignored and missing ones stay 0. Write `1.0` into the bias slots.
+3. For every step in depth order: `total = values[sources] @ weights`, or `0.0` when the node has no sources. A hidden node stores `activation(total)`; an output node stores the raw `total`.
+4. Return the value array, indexed by node position.
+
+Because each hidden node is finished before any deeper node is reached, one pass in depth order is enough.
 
 #### `hidden_count` and `enabled_count` (properties)
 
@@ -193,8 +233,8 @@ def mutate(self, rng: np.random.Generator, config: NeatConfig, tracker: Innovati
 
 Applies NEAT's mutations in place, in this order:
 
-1. **Weights.** For every connection, with probability `weight_mutate_rate`: with probability `weight_perturb_rate` add `normal(0, weight_perturb_scale)`, otherwise replace with `uniform(-weight_range, weight_range)`. With the defaults, 80 percent of weights move each generation, 72 percent by a small nudge and 8 percent by a reset.
-2. **Re-enable.** Every disabled connection is re-enabled with probability `enable_rate`.
+1. **Weights.** For every connection, with probability `weight_mutate_rate`: with probability `weight_perturb_rate` add `normal(0, weight_perturb_scale)`, otherwise replace with `uniform(-weight_range, weight_range)`. With the defaults, 80 percent of weights move each generation, 72 percent by a small nudge and 8 percent by a reset. Then `invalidate()`, because the compiled plan holds copies of the weights.
+2. **Re-enable.** Every disabled connection is re-enabled with probability `enable_rate`, with `invalidate()` after each one.
 3. **Add a node** with probability `add_node_rate` (`_add_node`).
 4. **Add a connection** with probability `add_connection_rate` (`_add_connection`).
 
@@ -204,7 +244,7 @@ Applies NEAT's mutations in place, in this order:
 def _add_node(self, rng: np.random.Generator, config: NeatConfig, tracker: InnovationTracker) -> None:
 ```
 
-Splits an enabled connection `src -> dst` into `src -> new -> dst`. Picks a random enabled connection (does nothing if there is none), disables it, appends a hidden `NodeGene` with a fresh id and `config.activation`, and appends two connections: `src -> new` with weight `1.0` and `new -> dst` with the old weight. Both get innovation numbers from the tracker. Then invalidates the depths.
+Splits an enabled connection `src -> dst` into `src -> new -> dst`. Picks a random enabled connection (does nothing if there is none), disables it, appends a hidden `NodeGene` with a fresh id and `config.activation`, and appends two connections: `src -> new` with weight `1.0` and `new -> dst` with the old weight. Both get innovation numbers from the tracker. Then invalidates the caches.
 
 **Worked example.** Take a minimal genome and suppose the chosen connection is innovation 5: node 0 (an input) to node 56 (output 5), weight `0.3`.
 
@@ -215,7 +255,7 @@ Splits an enabled connection `src -> dst` into `src -> new -> dst`. Picks a rand
 | New node | `NodeGene(67, "hidden", "tanh")` |
 | New connections | `ConnectionGene(816, 0, 67, 1.0)` and `ConnectionGene(817, 67, 56, 0.3)` |
 
-Node 67 now has depth 1 and output 56 has depth 2; the other outputs stay at depth 1. Before the split, node 0 contributed `0.3 * x0` to output 56. After it, the contribution is `0.3 * tanh(1.0 * x0)`. For small `x0`, `tanh(x0)` is close to `x0`, so the network behaves almost the same as before. That is the point of the weights 1 and old: a structural change that starts nearly neutral, so selection does not throw it away before it can be tuned.
+Node 67 now has depth 1 and output 56 has depth 2; the other outputs stay at depth 1. Before the split, node 0 contributed `0.3 * x0` to output 56. After it, the contribution is `0.3 * tanh(1.0 * x0)`. For small `x0`, `tanh(x0)` is close to `x0`, so the network behaves almost the same as before. That is the point of the weights 1 and old: a structural change that starts nearly neutral, so selection does not throw it away before it can be tuned. In the plan, node 67 becomes a new step before output 56's step, and output 56's step loses node 0 from its sources and gains node 67.
 
 #### `_add_connection(rng, config, tracker)`
 
@@ -229,7 +269,7 @@ Connects two unconnected nodes from lower depth to higher, so the network stays 
 - `depth[a] >= depth[b]`, unless `a` is an input or the bias and `b` is a hidden node at depth 0 (a hidden node with no enabled incoming connection, which may be wired up again);
 - the pair `(a.id, b.id)` already has a connection gene, enabled or not.
 
-The first pair that passes gets a connection with weight `uniform(-weight_range, weight_range)` and an innovation number from the tracker, and the depths are invalidated.
+The first pair that passes gets a connection with weight `uniform(-weight_range, weight_range)` and an innovation number from the tracker, and the caches are invalidated.
 
 #### `crossover(other, rng)`
 
@@ -243,7 +283,7 @@ Combines with another genome. By convention `self` is the fitter parent; callers
 - otherwise (disjoint or excess) the child's copy comes from `self`;
 - if the gene matched and was disabled in either parent, the child's copy is disabled with probability 0.75.
 
-Genes that only `other` has are dropped. The child's nodes are every non-hidden node from either parent, plus every hidden node referenced by a child connection. The child starts with `fitness = 0.0` and `species = -1`.
+Genes that only `other` has are dropped. The child's nodes are every non-hidden node from either parent, plus every hidden node referenced by a child connection. The child starts with `fitness = 0.0`, `species = -1` and no caches.
 
 #### `distance(other, config)`
 
@@ -271,9 +311,9 @@ Every genome here has at least 816 connections, so `n` is always the size of the
 def forward(self, inputs: np.ndarray) -> np.ndarray:
 ```
 
-Evaluates the network on one input vector and returns the output node values. Input nodes take the vector's values in node-list order (`zip(input_nodes, inputs)`, so extra inputs are ignored and missing ones stay 0), the bias is `1.0`, and every other node starts at 0. Enabled connections are grouped by destination. Nodes are visited in depth order; each hidden node sums `value[src] * weight` over its incoming connections and applies `ACTIVATIONS[n.activation]`; each output node keeps the raw sum, with no activation. Returns the output values as a float array in node-list order.
+Evaluates the network on one input vector and returns the output node values. It takes `output_slots` from `_compile()` and returns `self._values(inputs)[output_slots]`: a float array with one raw sum per output node, in node-list order. No activation is applied to outputs, which is what the softmax wants.
 
-This is plain Python loops over genes, not a matrix product. It is slower per decision than the `MLP`, which is one reason the NEAT trainer's generations take longer.
+The first call on a genome pays for `_compile`; every later call reuses the plan until `invalidate()`. Measured at about 30 microseconds per pass for a minimal genome. That is what made long NEAT runs feasible: a 48-genome generation plays 48 games of thousands of decisions each.
 
 #### `activations(inputs)`
 
@@ -281,7 +321,7 @@ This is plain Python loops over genes, not a matrix product. It is slower per de
 def activations(self, inputs: np.ndarray) -> dict[int, float]:
 ```
 
-The same computation as `forward`, but returns every node's value keyed by id. The dashboard's visualiser uses it to colour the graph.
+The same computation through `_values`, mapped back to node ids: `{node.id: value}` for every node in list order. The dashboard's visualiser uses it to colour the graph.
 
 #### `to_dict()`
 
@@ -289,7 +329,7 @@ The same computation as `forward`, but returns every node's value keyed by id. T
 def to_dict(self) -> dict:
 ```
 
-JSON-friendly form: `{"nodes": [[id, kind, activation], ...], "connections": [[innovation, src, dst, weight, enabled], ...], "fitness": fitness}`. The species id is not saved.
+JSON-friendly form: `{"nodes": [[id, kind, activation], ...], "connections": [[innovation, src, dst, weight, enabled], ...], "fitness": fitness}`. The species id and the caches are not saved.
 
 #### `from_dict(data)` (class method)
 
@@ -298,7 +338,7 @@ JSON-friendly form: `{"nodes": [[id, kind, activation], ...], "connections": [[i
 def from_dict(cls, data: dict) -> "NeatGenome":
 ```
 
-Rebuilds from `to_dict`, casting ids to `int`, weights to `float` and the enabled flag to `bool`. `fitness` defaults to `0.0` when missing. The champion files the NEAT trainer writes, the `LearnerSpec` sent to workers, and the roster entries the dashboard makes all carry this dictionary.
+Rebuilds from `to_dict`, casting ids to `int`, weights to `float` and the enabled flag to `bool`. `fitness` defaults to `0.0` when missing. The champion files the NEAT trainer writes, the `LearnerSpec` sent to workers, and the roster entries the dashboard makes all carry this dictionary. A rebuilt genome compiles its plan on its first forward pass.
 
 ### `NeatBrain`
 
@@ -340,7 +380,7 @@ def genome(self) -> np.ndarray:
 def set_genome(self, genome: np.ndarray) -> None:
 ```
 
-`genome()` returns the connection weights as a flat vector, in connection order. The shape is not part of it. `set_genome` writes weights back and raises `ValueError` when the count differs from the number of connections. The dashboard's gene history uses these vectors; the genetic trainer does not evolve NEAT brains.
+`genome()` returns the connection weights as a flat vector, in connection order. The shape is not part of it. `set_genome` writes weights back, raises `ValueError` when the count differs from the number of connections, and then calls `genome_data.invalidate()` so the next forward pass recompiles with the new weights. The dashboard's gene history uses these vectors; the genetic trainer does not evolve NEAT brains.
 
 #### `describe()`
 
@@ -373,6 +413,17 @@ print(genome.forward(np.zeros(VECTOR_SIZE)).shape)   # (16,)
 
 Setting both rates to 1 forces a structural mutation every call, which is how `tests/test_methods.py` checks the feed-forward rule: `depth[c.src] < depth[c.dst]` for every enabled connection.
 
+**Time a forward pass.**
+
+```python
+import timeit
+x = np.ones(VECTOR_SIZE)
+genome.forward(x)                                   # compiles the plan once
+print(timeit.timeit(lambda: genome.forward(x), number=10000) / 10000)
+```
+
+Expect tens of microseconds. Call `genome.invalidate()` first to include the compile cost in a single pass.
+
 **Play a genome in a game.** Give a roster entry `brain_name="neat"` and `genome=genome.to_dict()`, or wrap it yourself:
 
 ```python
@@ -389,12 +440,13 @@ brain = NeatBrain(genome, chaos=0.0)
 ## Gotchas
 
 - **`create_brain("neat")` raises `KeyError`.** `NeatBrain` is not in `BRAIN_REGISTRY`. `build_learner` in `training/common.py` and `Game`'s roster handling (when the genome is a dictionary) know how to build one; `create_brain` does not.
-- Output nodes carry an activation name but `forward` never applies it. Outputs are raw sums, which is what the softmax wants.
+- **Edit a gene by hand and the plan goes stale.** `_compile` caches the plan, and the plan holds copies of the weights. Change a `weight`, flip `enabled`, or append genes yourself and you must call `invalidate()`, or `forward` keeps using the old network. `mutate`, `_add_node`, `_add_connection` and `NeatBrain.set_genome` do this for you.
+- Output nodes carry an activation name but `_values` never applies it. Outputs are raw sums, which is what the softmax wants.
 - Innovation numbers are reused for the same `(src, dst)` pair within a generation, but `tracker.node()` always gives a fresh id. Two genomes that split the same connection in one generation get matching innovation numbers for the two new connections but different hidden node ids, so a crossover between them can pick `src -> new_a` from one parent and `new_b -> dst` from the other.
 - `_add_connection` gives up after 20 random tries. In a large, nearly fully connected genome most pairs are rejected, so the effective add-connection rate is lower than `add_connection_rate`.
 - A connection that was disabled and never re-enabled still counts in `distance` and in `genome()`. `enabled_count` is the number the trainer reports; `len(connections)` is larger.
-- `depths()` is cached. Change `enabled` or add genes by hand and call `invalidate()`, or `forward` will use a stale order.
-- `forward` matches inputs to input nodes by list order, not by id. Keep the input nodes first and in order; `minimal` and `crossover` do.
+- `_values` matches inputs to input nodes by list order, not by id. Keep the input nodes first and in order; `minimal` and `crossover` do.
+- The first forward pass after any change is slower than the rest, because it rebuilds the plan. In the trainer that happens once per genome per generation, since every child is mutated before it plays.
 - `crossover` keeps only `self`'s disjoint and excess genes. Call it on the fitter parent, as the trainer does, or the child loses the better parent's structure.
-- The genome grows but never shrinks. There is no delete mutation; disabled genes stay forever. Long runs give long gene lists and slower `forward`.
+- The genome grows but never shrinks. There is no delete mutation; disabled genes stay forever. Long runs give long gene lists. The plan skips disabled genes, so evaluation cost grows with enabled connections and nodes, not with the gene list.
 - `fitness` on a loaded genome is whatever the file held, not a fresh evaluation.

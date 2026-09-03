@@ -10,7 +10,7 @@ The pages in this folder:
 | [telemetry.md](telemetry.md) | Every tally, the bins, the hooks, `summary()` and `merge()` |
 | [plots.md](plots.md) | Every chart function, the bundles and the shared learning curves |
 | [experiments.md](experiments.md) | Parameter sweeps and the run folder layout |
-| [comparison.md](comparison.md) | Training methods, sizes and initializers compared under one budget, then the tournament |
+| [comparison.md](comparison.md) | Training methods, sizes and initializers trained to a win criterion, warm against cold, then the tournament |
 
 ## One learner against the voting strategy
 
@@ -18,9 +18,11 @@ Every method here trains **one** network. It plays as the learner in a few of th
 
 - **The opponent is fixed.** A score of 2.0 in epoch 1 and 2.0 in epoch 30 mean the same thing, because the field did not change under the learner. The genetic algorithm used to play the population against itself, where the target moves; `TrainingConfig.opponents="voting"` is now the default and `"self"` keeps the old tournament.
 - **The learner is visible.** On the dashboard's arena the learner-driven tributes wear a gold star, so you can follow the network being trained while the voting tributes fill the rest of the field.
-- **Every method reports the same numbers.** `IterationStats` in [../training/common.md](../training/common.md) is filled by all five trainers: `scores` (one episode return per learner episode), `mean_score`, `best_score`, `entropy` (nats), `mean_length` (ticks survived), `win_rate`, `val_score` (greedy games on fixed seeds `90000 + i`), `seconds`, `cumulative_seconds`, the curriculum `stage` and `opponents`, and a method-specific `extra` dictionary (losses, accuracy, species counts). One score function, one opponent, one record shape: that is what lets `comparison.py` overlay imitation, evolution and policy gradients on one chart.
+- **Every method reports the same numbers.** `IterationStats` in [../training/common.md](../training/common.md) is filled by all five trainers: `scores` (one episode return per learner episode), `mean_score`, `best_score`, `entropy` (nats), `mean_length` (ticks survived), `win_rate`, `val_score` and `val_win_rate` (greedy games on fixed seeds `90000 + i`), `seconds`, `cumulative_seconds`, the curriculum `stage` and `opponents`, and a method-specific `extra` dictionary (losses, accuracy, species counts). One score function, one opponent, one record shape: that is what lets `comparison.py` overlay imitation, evolution and policy gradients on one chart.
 
 The score is always the episode return under `RewardConfig` (see "How reward points are gained and lost" below), even for the evolutionary methods, which use it as fitness.
+
+**What "win rate" means with several learner copies.** The learner drives six tributes in one game, and a game has one victor, so at most one copy can win it. Every win rate in this project is game-level: a game counts as won when any learner copy was the victor, and the rate is the fraction of games won. Counting wins per copy would cap six copies at one sixth; counting games lets the rate reach 1.0, which is what "the learner beats this field" should mean. `win_rate` is over training games, `val_win_rate` over the greedy validation games, and the tournament's `win_rate` over its 75 seeded games.
 
 ## The five methods
 
@@ -41,13 +43,15 @@ The zombie video starts its agent against one zombie and works up to sixteen. Ou
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `opponents` | `(1, 3, 7, 11, 23)` | Voting opponents per stage; the learner's own copies are added on top |
-| `threshold` | `3.0` | Promote when the mean score of the last `window` iterations reaches this |
+| `promote_on` | `"win_rate"` | Judge promotion on the win rate (the learner must actually win games) or on `"score"` |
+| `win_threshold` | `0.5` | Promote when the win rate of the last `window` iterations averages at least this: a majority of games |
+| `threshold` | `3.0` | The bar when judging on score instead |
 | `window` | `5` | Iterations averaged for the promotion test |
-| `max_iterations_per_stage` | `40` | Promote anyway after this many iterations in a stage |
+| `max_iterations_per_stage` | `0` | Promote anyway after this many iterations in a stage; `0` means never |
 
-**Promotion rule.** After every iteration the trainer calls `curriculum.observe(mean_score)`. It returns `True`, and the trainer logs a `curriculum` event, when the recent mean clears the threshold or the stage times out. The trainer then rebuilds its config with `num_players = learners + opponents`, so the first stage is a 7-tribute game (6 learners and 1 opponent) and the last is the full 29 (6 and 23). The stage and opponent count are on every `IterationStats`, and `plots/curriculum.png` in a run folder draws the ladder. The genetic algorithm, NEAT, REINFORCE and PPO all take `curriculum=`; imitation ignores it because it never plays training games.
+**Promotion rule.** After every iteration the trainer calls `curriculum.observe(mean_score, win_rate)`, passing the validation win rate when it plays validation games and the training win rate otherwise. It returns `True`, and the trainer logs a `curriculum` event, when the learner has won at least half of those games over the last five iterations. There is no timeout by default: a learner that cannot beat one opponent stays against one opponent, which is a finding, not a bug. The trainer then rebuilds its config with `num_players = learners + opponents`, so the first stage is a 7-tribute game (6 learners and 1 opponent) and the last is the full 29 (6 and 23). The stage and opponent count are on every `IterationStats`, and `plots/curriculum.png` in a run folder draws the ladder. Genetic, NEAT, REINFORCE and PPO all judge promotion on validation wins. Imitation ignores the curriculum because it never plays training games.
 
-Why it helps: a fresh network against 23 voting tributes dies in the bloodbath before its rewards say anything. Against one opponent it survives long enough for the survival and needs terms to teach it, and the harder stages arrive once it can use them. Why it complicates comparison: the mean score drops at every promotion, because the field got harder. Read `score_by_method.png` together with `curriculum.png`, or compare `val_score`, which is always played on the full roster.
+Why it helps: a fresh network against 23 voting tributes dies in the bloodbath before its rewards say anything. Against one opponent it survives long enough for the survival and needs terms to teach it, and the harder stages arrive once it can actually win the easier ones. Why it complicates comparison: the mean score drops at every promotion, because the field got harder. Read `score_by_method.png` together with `curriculum.png` (or `curriculum_by_method.png` in a comparison), or compare `val_score`, which is always played on the full roster.
 
 ## How the measurements are taken
 
@@ -78,7 +82,7 @@ Who is measured matters:
 | `results/<run>/history.json` | `save_run` | The method's own per-step record (GA `GenerationStats`, RL `EpochStats`, imitation `ImitationStats`, NEAT the same rows as `learning.json`) |
 | `results/<run>/events.txt` | `save_run` | The event monitor's log: rollouts, evolution, curriculum promotions, records |
 | `results/<run>/champion.json` | `save_run` | The best genome or policy, loadable from the dashboard's Train tab; `brain_name` is `neural`, `voting` or `neat` |
-| `results/<comparison>/results.csv`, `summary.json`, `results_table.tex`, `report.md` | `MethodComparison.write` | One row per variant with training and tournament numbers; every learning curve; the generated report |
+| `results/<comparison>/results.csv`, `summary.json`, `results_table.tex`, `report.md` | `MethodComparison.write` | One row per variant with training, criterion and tournament numbers; every learning curve; the generated report |
 | `results/<comparison>/runs/<variant>/` | `save_run` | Each variant's own run folder |
 | `results/<sweep>/results.csv`, `summary.json` | `Sweep.write` | One row per swept value with every metric, plus merged telemetry |
 | `results/<sweep>/batches/<value>/` | `Runner.save` | The four CSV tables and `telemetry.json` for that value |
@@ -101,7 +105,7 @@ A reviewer asks three things. Is it performing better? Is it behaving sensibly? 
 | Are tributes living longer? | `game_length.png`, `survival.png` (RL and imitation), `behaviour_over_training.png` panel 1 | `mean_length`; `train_survival`, `val_survival`; `mean_survival_ticks` | `plots.curves`, `plots.behaviour_metrics_over_training` |
 | Are they winning and killing more? | `win_rate_shared.png`, `win_kill_rate.png` (RL), `win_rate.png` (imitation), `behaviour_over_training.png` panels 2 and 3 | `win_rate`, `val_win_rate`, `kill_rate` | same |
 
-**What a good trend looks like.** Mean score rises and then flattens. Validation score follows it. Validation is played with the greedy policy on fixed seeds against the config's brain, so it is the honest number. A big gap with training high and validation flat means the policy is exploiting its own sampling noise, not the game. Survival ticks should rise before win rate does, because staying alive is the first thing the reward teaches. Win rate on a 24-tribute field is small by nature; 6 learners winning 1 game in 4 is a 4 percent per-learner rate and already strong. For the GA and NEAT, best score rising while mean score follows a few generations behind is healthy; mean stuck near the start while best jumps around means the games are too noisy, so raise `rounds_per_generation`. For imitation, validation accuracy climbing with training accuracy and then flattening is what you want; with the default 64 by 32 network it flattens near 80 percent.
+**What a good trend looks like.** Mean score rises and then flattens. Validation score follows it. Validation is played with the greedy policy on fixed seeds against the config's brain, so it is the honest number. A big gap with training high and validation flat means the policy is exploiting its own sampling noise, not the game. Survival ticks should rise before win rate does, because staying alive is the first thing the reward teaches. Win rate is game-level, so the question it answers is "how often does one of my six copies come out on top of a 24-tribute field"; a fresh network is near zero, and a majority of games won is the bar the curriculum and the comparison use. It is a coarse number per iteration (two validation games give 0, 0.5 or 1), so read it over a window. For the GA and NEAT, best score rising while mean score follows a few generations behind is healthy; mean stuck near the start while best jumps around means the games are too noisy, so raise `rounds_per_generation`. For imitation, validation accuracy climbing with training accuracy and then flattening is what you want; with the default 64 by 32 network it flattens near 80 percent.
 
 ## 2. Behaviour
 
@@ -154,42 +158,49 @@ For the evolutionary methods the entropy on `IterationStats` is action entropy f
 
 ## Comparing methods, sizes and initialisations, then the tournament
 
-Learning curves alone cannot rank methods: an imitation epoch and a NEAT generation cost different amounts of time, and each method's mean score is measured on the games it chose to play. [comparison.md](comparison.md) fixes both. `experiments/run_comparison.py` ([../experiments/run_comparison.md](../experiments/run_comparison.md)) trains every variant for the same `--iterations` (or the same `--time-budget`), then runs the tournament: every champion plays the same 75 seeded games (seeds `50000 + i`) as the learner, greedily, in 6 slots against voting opponents on the base config.
+Learning curves alone cannot rank methods: an imitation epoch and a NEAT generation cost different amounts of time, and each method's mean score is measured on the games it chose to play. [comparison.md](comparison.md) fixes both. `experiments/run_comparison.py` ([../experiments/run_comparison.md](../experiments/run_comparison.md)) trains every variant **to the win criterion**: each one stops as soon as its validation win rate over the last `--window` iterations (5) reaches `--until-win` (0.5, a majority of games) at the final curriculum stage, or when it runs out of `--iterations` (or `--time-budget`). The iterations and seconds each variant needed are recorded. With `--extend-iterations` (and `--extend-hours`), a variant that runs out of `--iterations` without meeting the criterion is not cut off: once every variant has had its first budget, the slow ones keep training, with the same population or weights, until they meet the criterion or exhaust the extension, so the record shows how long a cold start really needs and whether its final network competes. Then it runs the tournament: every champion plays the same 75 seeded games (seeds `50000 + i`) as the learner, greedily, in 6 slots against voting opponents on the base config.
 
 ```bash
 python experiments/run_comparison.py --iterations 20 --games 75 --workers 4
+python experiments/run_comparison.py --methods imitation,genetic,reinforce,ppo --pairs --curriculum --iterations 200 --workers 4
+python experiments/run_comparison.py --methods imitation,genetic,neat,reinforce,ppo --pairs --curriculum --iterations 150 --extend-iterations 1000 --extend-hours 2 --workers 6
 python experiments/run_comparison.py --methods imitation,reinforce,ppo --warm --curriculum --iterations 30
 python experiments/run_comparison.py --methods ppo --sizes 16,64x32,128x64
 python experiments/run_comparison.py --methods ppo --initializers xavier_uniform,he_uniform,zeros
+python experiments/run_comparison.py --iterations 30 --until-win -1
 ```
 
-**What `results.csv` contains.** One row per variant: `variant`, `method`, `iterations`, `train_seconds`, `final_mean_score`, `best_val_score`, `tournament_score`, `tournament_win_rate`, `tournament_survival`, `tournament_kills`, `lines_of_code`. `summary.json` adds the tournament dictionary and every learning curve; `results_table.tex` is the same table for a paper.
+The last line turns the criterion off and gives every variant the same fixed budget, the old behaviour.
 
-**What `report.md` contains.** The budget sentence, a ranking table by tournament score, three bold lines (best in the tournament, simplest to implement by lines of code, fastest to train), one note per method on why they differ, and the chart list.
+**Warm against cold.** `--pairs` makes two variants of every reward or evolution method except NEAT: `<method>_cold` from random weights and `<method>_warm` from the imitation champion. That is the experiment behind the claim that pretraining pays: the report's "Warm start against cold start" table puts the two tournament win rates and the two iteration counts to the criterion side by side and names the winner of each pair. Say "warm-started PPO won 0.61 of tournament games against 0.40 cold, and reached the criterion in 38 epochs against 71" and the argument is made; say "PPO is better" and it is not.
 
-**`score_by_method.png` versus `score_by_time.png`.** The first plots mean score against iteration and answers "which method learns most per update". The second plots the same scores against `cumulative_seconds` and answers "which method learns most per minute of CPU". They can disagree: NEAT and the genetic algorithm play 48 genomes' worth of games per iteration and look strong per iteration but weak per second; imitation plays no training games at all and looks fast on both. The time chart is the one to show when the budget is compute. `validation_by_method.png` is the honest version of the first chart, and `entropy_by_method.png` and `length_by_method.png` show whether the methods reached the same confidence and survival.
+**What `results.csv` contains.** One row per variant: `variant`, `method`, `iterations`, `train_seconds`, `final_mean_score`, `best_val_score`, `reached_criterion`, `iterations_to_criterion`, `seconds_to_criterion`, `final_val_win_rate`, `tournament_score`, `tournament_win_rate`, `tournament_survival`, `tournament_kills`, `lines_of_code`. `summary.json` adds the tournament dictionary and every learning curve; `results_table.tex` is the same table for a paper.
 
-**Why 75 tournament games.** The Battleship video compares strategies head to head with win rates and asks "how much is one turn worth". Its lesson is that single games are coin flips: two strategies that differ by a real few percent look identical, or reversed, over ten games. Our per-learner win rate is a few percent on a 24-tribute field. With 75 games and 6 learners each, 450 learner episodes, the standard error of a 5 percent win rate is about 1 percent, so a two-point gap is real; over 10 games it is not. The same video's second lesson is that one extra win, or one turn saved, is worth a lot at the top: a champion that wins 6 percent of episodes instead of 4 is half again as good, though the two numbers look close on a bar chart. Read `tournament_win_rate.png` with that in mind, and `tournament_mean_score.png` for the finer-grained ranking, since the return moves with survival, kills and placing, not just wins.
+**What `report.md` contains.** The budget sentence, a ranking table by tournament win rate (score breaks ties), three bold lines (best in the tournament, simplest to implement by lines of code, fastest to train), the "Training to the win criterion" table (reached or not, iterations and seconds to get there, final validation win rate), the warm-versus-cold table when there are pairs, one note per method on why they differ, and the chart list.
+
+**`score_by_method.png` versus `score_by_time.png`, and the win-rate pair.** The first plots mean score against iteration and answers "which method learns most per update". The second plots the same scores against `cumulative_seconds` and answers "which method learns most per minute of CPU". They can disagree: NEAT and the genetic algorithm play 48 genomes' worth of games per iteration and look strong per iteration but weak per second; imitation plays no training games at all and looks fast on both. The time chart is the one to show when the budget is compute. `win_rate_by_method.png` and `win_rate_by_time.png` are the same two views of `val_win_rate`, and they are the charts that show the criterion being reached: a line crossing 0.5 and staying there. `curriculum_by_method.png` shows how many opponents each variant faced at each iteration, so a score dip can be matched to a promotion. `validation_by_method.png` is the honest version of the first chart, and `entropy_by_method.png` and `length_by_method.png` show whether the methods reached the same confidence and survival.
+
+**Why 75 tournament games.** The Battleship video compares strategies head to head with win rates and asks "how much is one turn worth". Its lesson is that single games are coin flips: two strategies that differ by a real few percent look identical, or reversed, over ten games. The tournament win rate is game-level, one flag per game, so 75 games are 75 samples of it. The standard error of a 50 percent win rate over 75 games is about 6 percent, so a gap of a dozen points is real and a gap of five is not; over 10 games nothing is. The score, survival and kill columns average 450 learner episodes (75 games times 6 copies) and are steadier. The same video's second lesson is that one extra win is worth a lot at the top: a champion that wins 60 percent of games instead of 50 is a different tribute, though the two bars look close. Read `tournament_win_rate.png` with that in mind, and `tournament_mean_score.png` for the finer-grained ranking, since the return moves with survival, kills and placing, not just wins.
 
 **Sizes and initialisers.** `--sizes 16,64x32,128x64` makes one variant per hidden-layer layout of the same method; `--initializers` makes one per weight initializer. The tournament plays every champion on the same base config, so the only difference between the rows is the network. A bigger network that wins the tournament but loses `score_by_time.png` is the usual finding. `zeros` is the control that shows an initializer matters at all: every unit starts identical and symmetric gradients keep them so.
 
 ## How to answer the research question
 
-The question is "which way of training a brain makes the most sense for the Hunger Games, and which is easiest to implement?" The comparison gives three numbers per method: tournament score, training seconds, and lines of code. Put them side by side and the argument writes itself.
+The question is "which way of training a brain makes the most sense for the Hunger Games, and which is easiest to implement?" The comparison gives four numbers per method: tournament win rate, iterations and seconds to the win criterion, and lines of code. Put them side by side and the argument writes itself.
 
 | Method | Lines of code (files counted) | Why it is slower or worse |
 | --- | --- | --- |
-| Imitation | 523 (`imitation.py`) | Cannot exceed its teacher. It minimises cross-entropy against the voting brain, never survival or wins, so its ceiling is "as good as the video's rules" |
-| Genetic algorithm | 748 (`genetic.py`) | Scales badly with weight count. Mutating 5,872 weights at random finds improvements slowly; each generation is 48 genomes times `rounds_per_generation` games for one update |
-| NEAT | 945 (`neat.py` and `brain/neat.py`) | Slow per generation and starts tiny. A minimal genome has no hidden nodes and must grow them one mutation at a time; speciation, fitness sharing and stagnation add machinery to get right |
-| REINFORCE | 745 (`reinforce.py`) | High variance. One gradient step per batch of 4 episodes, with returns that swing on whether a learner won the bloodbath; curves are jagged and can regress |
-| PPO | 886 (`reinforce.py` and `ppo.py`) | Reuses data but has more knobs. Several clipped passes per batch make it the most stable reward method; `clip_ratio`, `update_epochs`, `minibatch_size` and `gae_lambda` all need choosing |
+| Imitation | 525 (`imitation.py`) | Cannot exceed its teacher. It minimises cross-entropy against the voting brain, never survival or wins, so its ceiling is "as good as the video's rules" |
+| Genetic algorithm | 757 (`genetic.py`) | Scales badly with weight count. Mutating 5,872 weights at random finds improvements slowly; each generation is 48 genomes times `rounds_per_generation` games for one update |
+| NEAT | 981 (`neat.py` and `brain/neat.py`) | Slow per generation and starts tiny. A minimal genome has no hidden nodes and must grow them one mutation at a time; speciation, fitness sharing and stagnation add machinery to get right |
+| REINFORCE | 753 (`reinforce.py`) | High variance. One gradient step per batch of 4 episodes, with returns that swing on whether a learner won the bloodbath; curves are jagged and can regress |
+| PPO | 894 (`reinforce.py` and `ppo.py`) | Reuses data but has more knobs. Several clipped passes per batch make it the most stable reward method; `clip_ratio`, `update_epochs`, `minibatch_size` and `gae_lambda` all need choosing |
 
-**Which makes the most sense.** For this game the reward methods win on the numbers, and PPO warm-started from imitation is the combination to recommend: imitation supplies instincts in minutes (a fresh network dies of thirst on day three; after imitation 2 of 12 learner deaths were dehydration instead of 10 of 12), and PPO improves on them with a stable, sample-efficient update against the fixed voting field. The genetic algorithm is the right choice when there is no reward function to write or the brain has a handful of genes (it can tune the voting brain's eight); NEAT is the choice when the question is what shape the network should be. REINFORCE is the teaching baseline that PPO is measured against.
+**Which makes the most sense.** For this game the reward methods win on the numbers, and PPO warm-started from imitation is the combination to recommend: imitation supplies instincts in minutes (a fresh network dies of thirst on day three; after imitation 2 of 12 learner deaths were dehydration instead of 10 of 12), and PPO improves on them with a stable, sample-efficient update against the fixed voting field. The `--pairs` run is what proves the warm start: the warm twin should reach the win criterion in fewer iterations and win more tournament games than the cold twin. The genetic algorithm is the right choice when there is no reward function to write or the brain has a handful of genes (it can tune the voting brain's eight); NEAT is the choice when the question is what shape the network should be. REINFORCE is the teaching baseline that PPO is measured against.
 
 **Which is easiest to implement.** By lines of code, imitation: one loss, one optimiser, no game logic beyond recording a teacher. The genetic algorithm is next and needs no calculus at all. PPO is only 141 lines more than REINFORCE because it inherits the collection, value network, validation and curriculum. NEAT is the largest because the network itself is a data structure that has to be evolved.
 
-**Say it with the files.** The ranking in `report.md`, `plots/tournament_mean_score.png` and `plots/tournament_win_rate.png` for performance, `plots/train_seconds.png` and `plots/score_by_time.png` for cost, `plots/lines_of_code.png` for effort. Repeat the run with two more `--seed` values before writing the sentence; one seed is an anecdote.
+**Say it with the files.** The ranking and the criterion table in `report.md`, `plots/tournament_win_rate.png` and `plots/tournament_mean_score.png` for performance, `plots/win_rate_by_time.png`, `plots/train_seconds.png` and `plots/score_by_time.png` for cost, `plots/lines_of_code.png` for effort. Repeat the run with two more `--seed` values before writing the sentence; one seed is an anecdote.
 
 ## Answers for reviewers
 
@@ -205,7 +216,7 @@ Five trainers share the same brain input, the same menu, the same opponents and 
 | Champion | Lowest validation loss | Best fitness ever | Best fitness ever | Best validation return | Best validation return |
 | Works on | The neural brain | Any genome, including the voting brain's 8 genes | NEAT genomes | The neural brain | The neural brain |
 
-**Warm starts.** Every trainer accepts `initial_genome`. REINFORCE, PPO and imitation load it into their network; the genetic algorithm builds its population as the genome plus relatives perturbed by a quarter of the mutation scale; NEAT clones a NEAT genome and mutates the copies. In the dashboard the "start from the current champion" checkbox passes the previous run's champion into the next run; in the comparison, `warm_from` does it.
+**Warm starts.** Every trainer accepts `initial_genome`. REINFORCE, PPO and imitation load it into their network; the genetic algorithm builds its population as the genome plus relatives perturbed by a quarter of the mutation scale; NEAT clones a NEAT genome and mutates the copies. In the dashboard the "start from the current champion" checkbox passes the previous run's champion into the next run; in the comparison, `warm_from` does it, and `run_comparison.py --pairs` builds a cold and a warm variant of each method so the two can be compared on the same seeds.
 
 ### How reward points are gained and lost
 
@@ -253,15 +264,16 @@ The output is a menu of 16 items: rest, drink, eat, hunt, pick up, heal, attack 
 | Number | Games behind it, with the defaults |
 | --- | --- |
 | One imitation epoch's accuracy | No new games: one pass over 80 percent of about 40,000 recorded decisions; validation on the other 20 percent |
-| One imitation epoch's `val_score` | 1 fixed-seed game with 6 students, greedy |
-| One REINFORCE or PPO epoch's `mean_score` | 4 episodes times 6 learners, 24 learner episodes |
-| One GA generation's `mean_score` | 48 genomes times 2 rounds, each a game with 6 learner copies |
-| One NEAT generation's `mean_score` | 48 genomes times 1 round |
-| Any method's `val_score` | 2 fixed-seed games times 6 learners (imitation: 1 game) |
-| One tournament row | 75 games times 6 learners, 450 learner episodes |
+| One imitation epoch's `val_score` and `val_win_rate` | 1 fixed-seed game with 6 students, greedy; the win rate is 0 or 1 |
+| One REINFORCE or PPO epoch's `mean_score` | 4 episodes times 6 learners, 24 learner episodes; `win_rate` is over the 4 games |
+| One GA generation's `mean_score` | 48 genomes times 2 rounds, each a game with 6 learner copies; `win_rate` is over those 96 games |
+| One NEAT generation's `mean_score` | 48 genomes times 1 round; `win_rate` is over those 48 games |
+| Any method's `val_score` | 2 fixed-seed games times 6 learners (imitation: 1 game); `val_win_rate` is over the 2 games, so 0, 0.5 or 1 |
+| The win criterion | The mean of `val_win_rate` over 5 iterations: 10 validation games (imitation: 5) |
+| One tournament row | 75 games; score, survival and kills average 450 learner episodes, the win rate averages the 75 games |
 | One sweep row | `games_per_value = 50` games, every tribute measured |
 
-Raise `--episodes`, `--rounds`, `--games` or `validation_games` before trusting a small difference.
+Raise `--episodes`, `--rounds`, `--games`, `--window` or `validation_games` before trusting a small difference.
 
 ### What the dashboard is built with
 
@@ -278,7 +290,7 @@ python experiments/run_sweep.py --parameter chaos --values 0,0.25,0.5,0.75,1 --g
 python experiments/run_comparison.py --iterations 20 --games 75 --workers 4 --seed 0
 ```
 
-Each writes `results/<name>_<timestamp>/` with `config.json`, then `history.json`, `learning.json`, `events.txt` and `champion.json` for a training run, `results.csv` and `summary.json` for a sweep or a comparison, and `plots/`. A comparison also writes `results_table.tex`, `report.md` and one run folder per variant under `runs/`. The `--seed` values make the population, the episode seeds and the games repeatable.
+Each writes `results/<name>_<timestamp>/` with `config.json`, then `history.json`, `learning.json`, `events.txt` and `champion.json` for a training run, `results.csv` and `summary.json` for a sweep or a comparison, and `plots/`. A comparison also writes `results_table.tex`, `report.md` and one run folder per variant under `runs/`. The `--seed` values make the population, the episode seeds and the games repeatable. A comparison's `config.json` records `until_win_rate` and `win_window`, so a reader can tell whether a variant stopped at the criterion or at the ceiling.
 
 From the dashboard (`python -m hunger_games ui`): on the Train tab pick the method (imitation, genetic, neat, reinforce or ppo), tick the curriculum and "start from the current champion" if wanted, set the numbers, press Start, and when it finishes type a name and press "Save run folder". The run folder's `config.json` records the method and the trainer settings. A training run started from the dashboard plays on the painted map and roster, so mention that in a paper.
 
@@ -289,8 +301,8 @@ From the dashboard (`python -m hunger_games ui`): on the Train tab pick the meth
 3. Take `action_distribution_over_training.png` for the headline behaviour figure. It is the one chart that shows random turning into structured.
 4. Take `instinct_curves.png`, `fight_or_flight.png` and `proximity_vs_remaining.png` for the three instincts: needs, danger, field size.
 5. Take `armed_vs_unarmed_heatmaps.png` to show that the ring layout is being used as designed.
-6. Run `experiments/run_comparison.py` for the method figure: `plots/score_by_time.png`, `plots/tournament_win_rate.png`, `plots/lines_of_code.png`.
-7. Repeat with two more seeds and report the mean and spread of the final validation score. One seed is an anecdote.
+6. Run `experiments/run_comparison.py --pairs --curriculum` for the method figure: `plots/win_rate_by_time.png`, `plots/tournament_win_rate.png`, `plots/lines_of_code.png`, and the criterion and pair tables from `report.md`.
+7. Repeat with two more seeds and report the mean and spread of the final validation score and win rate. One seed is an anecdote.
 8. For a baseline, run the same behaviour charts on the untrained voting brain with a one-value sweep, `python experiments/run_sweep.py --parameter chaos --values 0.5 --games 50`, and read `plots/behaviour/`.
 
 ## Comparing two brains fairly
@@ -300,7 +312,8 @@ From the dashboard (`python -m hunger_games ui`): on the Train tab pick the meth
 - Use the same number of games. Entropy and the instinct curves are ratios, but the heatmaps and histograms are counts, and `plots.heatmap` normalises by total time, which differs when tributes live longer.
 - Compare validation, not training. Training numbers are sampled at temperature 1 and drift with the entropy bonus and the curriculum stage; validation is greedy on fixed seeds on the full roster.
 - State the field. A learner's win rate depends on who else is in the arena. The default opponent is the voting brain at `chaos=0.5`.
-- State the starting point. A warm-started run and a run from random weights are different experiments; say which champion seeded it.
+- State the starting point. A warm-started run and a run from random weights are different experiments; say which champion seeded it. The `_cold` and `_warm` names in a pairs run do this for you.
+- State what a win is. A game-level win (any of six copies is the victor) and a per-copy win are different numbers by a factor of up to six. This project reports game-level wins everywhere.
 
 ## What the raw summary lets you compute
 
@@ -313,6 +326,7 @@ From the dashboard (`python -m hunger_games ui`): on the Train tab pick the meth
 | Deaths by cause as shares | divide each `deaths_by_cause` value by `death_count` |
 | Placement histogram of learners | `np.bincount(placements)` (survivors show as 0, see the limitations) |
 | Score gap between two comparison variants | subtract their `tournament_score` rows in `results.csv`; the per-episode spread is in `summary.json["learning"]` |
+| Iterations saved by a warm start | subtract the `_warm` row's `iterations_to_criterion` from the `_cold` row's in `results.csv` |
 
 ## Watching it live in the dashboard
 
@@ -331,13 +345,16 @@ Two differences from the PNGs: the live heatmap is scaled to its brightest cell 
 7. The measured tributes are the learners. Check the "Who is measured" table above.
 8. If the run was warm-started, the final numbers beat the champion it started from, not just a random network.
 9. If the claim is "method A beats method B", it comes from the tournament with the same seeds, not from two training curves with different budgets.
+10. If the claim is "it wins", it means a majority of validation games at the final curriculum stage (the comparison's criterion), and the win rate quoted is game-level.
 
 ## Known limitations
 
-- **Small numpy networks.** The brain is a plain MLP written in numpy, two hidden layers of 64 and 32 by default. There is no GPU path and no recurrence, so the tribute has no memory beyond what the perception carries. NEAT genomes are evaluated node by node in Python and are slower still.
+- **Small numpy networks.** The brain is a plain MLP written in numpy, two hidden layers of 64 and 32 by default. There is no GPU path and no recurrence, so the tribute has no memory beyond what the perception carries. NEAT genomes compile to a numpy evaluation plan (about 30 microseconds per decision), but a NEAT generation still plays 48 games.
 - **REINFORCE variance.** Returns are noisy, rewards are sparse at the end of an episode, and only 4 episodes with 6 learners feed each update. Expect jagged curves. PPO is steadier but not immune.
 - **Imitation is capped by its teacher.** The student learns the voting brain's rules and its mistakes. Its validation games measure survival and wins, but the loss it minimises never sees them; a better copy is not always a better tribute.
 - **The curriculum changes the score's meaning.** Mean score drops at every promotion because the field grows. Compare `val_score`, which is always on the full roster, or turn the curriculum off for a clean curve.
+- **The curriculum can stall, on purpose.** With no timeout a learner that never wins half of its validation games stays on stage 0, and the comparison's criterion is never tested for it.
+- **Win rates are coarse per iteration.** Two validation games give 0, 0.5 or 1. The curriculum and the criterion average five iterations, which is still only ten games. Raise `validation_games` when the win rate is the claim.
 - **The tournament is one field.** Every champion fights voting opponents at `chaos=0.5` on the base config. A champion that beats that field may not beat a different brain, and champions never fight each other.
 - **Lines of code is a rough measure.** It counts whole files, comments included, and NEAT's total includes its genome module. It says how much there is to read, not how hard it was to get right.
 - **Telemetry measures the voting brain too** in sweeps and in the GA's `"self"` mode. For a clean comparison of a trained brain, load its genome into every tribute first.

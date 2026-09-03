@@ -10,6 +10,8 @@ This file evolves NEAT genomes: the shape of the network as well as its weights.
 
 The population starts as minimal genomes, inputs wired straight to the outputs. Each generation every genome plays as the learner against voting opponents and is scored by its episode return, the same score every other trainer uses. Genomes are grouped into species by structural similarity. Fitness is shared within a species, so a big species cannot crowd everyone out. Each species is given offspring in proportion to its share of the total adjusted fitness, and offspring come from crossover and mutation. Species that stop improving for too long are removed. This follows the original NEAT paper and the Monopoly video's use of it.
 
+The trainer also reports game-level win rates. A game is won when any of the genome's copies was the victor. The champion's validation returns its score and its win rate, and the curriculum is promoted on validation wins.
+
 **How it relates to the Monopoly video.** The video scored each NEAT genome by playing it in games against other members of the population, a tournament fitness. Here fitness is the episode return against fixed voting opponents. That makes fitness absolute rather than relative: a score of 4.0 in generation 2 means the same as 4.0 in generation 20, and the curve can be compared with the other four trainers. The genetic trainer's `opponents="self"` mode is the closest thing to the video's tournament in this project.
 
 ## Concepts you need
@@ -25,6 +27,8 @@ The population starts as minimal genomes, inputs wired straight to the outputs. 
 **Adaptive threshold.** The compatibility threshold moves each generation: down when there are fewer species than the target, up when there are more. This keeps the species count near `target_species` without hand tuning.
 
 **Episode return.** The learner's total reward in one game under `RewardConfig`, computed by `play_rl_episode` in [reinforce.md](reinforce.md). The same game and the same reward the RL trainers use, with the NEAT genome in the learner slots.
+
+**Game-level win.** `play_rl_episode` returns `learner_won`, true when any learner copy won the game. Every win rate in this file is a fraction of games with that flag.
 
 ## Walkthrough
 
@@ -53,7 +57,7 @@ class NeatTrainerConfig:
 | `record_showcase` | `True` | Record one game per generation for the training feed |
 | `neat` | `NeatConfig()` | Mutation and speciation settings (see [../brain/neat.md](../brain/neat.md)) |
 
-Design reasoning: with 48 genomes and 1 round, a generation is 48 games, each with 6 copies of one genome against 18 voting opponents. That is twelve times the games of a REINFORCE epoch, which is why NEAT is the slowest method per iteration.
+Design reasoning: with 48 genomes and 1 round, a generation is 48 games, each with 6 copies of one genome against 18 voting opponents. That is twelve times the games of a REINFORCE epoch, which is why NEAT is the slowest method per iteration even now that each decision is a compiled forward pass.
 
 ### `Species`
 
@@ -98,7 +102,7 @@ Stores the settings, seeds `self.rng` from `neat.seed`, and makes an `Innovation
 - **`initial_genome is None`:** `population_size` minimal genomes from `NeatGenome.minimal(VECTOR_SIZE, MENU_SIZE, ...)`, all sharing the tracker, so they have identical structure and innovation numbers and differ only in weights.
 - **`initial_genome` given (a warm start):** the dictionary is rebuilt with `from_dict`, the tracker's counters are set past the genome's highest innovation number and node id, and the population is `population_size` copies. The first copy is exact; every other copy is mutated once.
 
-Then `species = []`, `next_species_id = 0`, `compatibility_threshold = neat.neat.compatibility_threshold`, an empty `history` (and `learning_history`, which is the same list object), an `EventLog`, `generation = 0`, the stop flag, the start time, `best = None` and `best_mean_score = -inf`.
+Then `species = []`, `next_species_id = 0`, `compatibility_threshold = neat.neat.compatibility_threshold`, an empty `history` (and `learning_history`, which is the same list object), an `EventLog`, `generation = 0`, the stop flag, the start time, `best = None`, `best_species_id = None`, `_last_wins = []` (the game-level win flags of the last evaluation) and `best_mean_score = -inf`.
 
 Only a NEAT dictionary fits `initial_genome`. The dashboard drops a neural warm start when the method is NEAT, and the method comparison only passes a champion of the same kind.
 
@@ -141,17 +145,19 @@ Runs episode jobs through a `ProcessPoolExecutor` when `workers > 1` and there i
 def evaluate(self, on_progress: Callable[[int, int], None] | None = None) -> tuple[list[dict], Recording | None]:
 ```
 
-Scores every genome by its mean episode return against voting opponents. For every genome and every round it builds a job with a random seed, `greedy=True`, and `record` only for the first genome's first round when `record_showcase` is on. After `_play`, each job's outcomes (one per learner slot) are averaged into the owning genome's total, telemetry summaries are collected, the recording is kept as the showcase, and `on_progress(done, total)` is called. Finally `genome.fitness = total / count` for every genome. Returns `(telemetry_list, showcase)`.
+Scores every genome by its mean episode return against voting opponents. For every genome and every round it builds a job with a random seed, `greedy=True`, and `record` only for the first genome's first round when `record_showcase` is on. Then `_last_wins` is emptied and the jobs are played. For each result: the outcomes (one per learner slot) are averaged into the owning genome's total, the telemetry summary is collected, `int(result["learner_won"])` is appended to `_last_wins`, the recording is kept as the showcase, and `on_progress(done, total)` is called. Finally `genome.fitness = total / count` for every genome. Returns `(telemetry_list, showcase)`.
+
+`_last_wins` has one entry per job, so with the defaults it is 48 flags, one per game of the generation.
 
 Note `greedy=True`: NEAT genomes play with chaos 0 and take the argmax. There is no exploration noise in the episodes; the variety comes from mutation.
 
 #### `validate(genome)`
 
 ```python
-def validate(self, genome: NeatGenome) -> float:
+def validate(self, genome: NeatGenome) -> tuple[float, float]:
 ```
 
-Mean return of a genome on the fixed validation seeds `validation_seed + i`, greedy, never recorded. Returns `0.0` when `validation_games <= 0`.
+Mean return and game-level win rate of a genome on the fixed validation seeds `validation_seed + i`, greedy, never recorded. The return is averaged over every learner slot of every game; the win rate is the mean of `learner_won` over the games. Returns `(0.0, 0.0)` when `validation_games <= 0`.
 
 #### `speciate()`
 
@@ -177,7 +183,7 @@ def reproduce(self) -> None:
 Builds the next population from the species:
 
 1. **Stagnation.** For each species, if its best member's fitness beats `best_fitness`, update it and reset `stale`; otherwise add one to `stale`.
-2. **Removal.** Keep species with `stale < stagnation`, or that hold `self.best`. Log how many were removed. If nothing survives, keep the first species.
+2. **Removal.** Keep species with `stale < stagnation`, or whose id is `best_species_id` (the champion's species). Log how many were removed. If nothing survives, keep the first species.
 3. **Adjusted fitness.** `floor` is the lowest fitness in any species. Each member's `adjusted = (fitness - floor + 1e-3) / len(species.members)`. The shift makes every value positive so shares work with negative returns; the division is fitness sharing. Species totals are summed into `grand`.
 4. **Offspring per species.** `tracker.reset_generation()`, then for each species: `share = round(population_size * total / grand)`; members sorted best first. If the species has at least `elite_species_size` members and `share > 0`, the best member is copied unchanged and `share` drops by one. Parents are the top `ceil(len(members) * survival_threshold)`, at least one. For each remaining share: with more than one parent and probability `crossover_rate`, pick two parents at random, order them fitter first, and `fitter.crossover(other, rng)`; otherwise copy a random parent. Every child is mutated. The species' representative becomes a copy of its best member.
 5. **Fill or trim.** While there are fewer children than `population_size`, add a mutated copy of the best genome in the whole population. Then cut to `population_size`.
@@ -196,12 +202,12 @@ One generation, in this order:
 2. `_apply_curriculum()`.
 3. `telemetry, showcase = self.evaluate(on_progress)`.
 4. The generation's champion is the fittest genome. If it beats `self.best`, store a copy and log a `"record"` event with its fitness, hidden node count and connection count.
-5. `val_score = self.validate(champion)`, the champion of this generation, not necessarily `self.best`.
+5. `val_score, val_win_rate = self.validate(champion)`, the champion of this generation, not necessarily `self.best`.
 6. Merge the telemetry with `BehaviorTelemetry.merge`.
 7. `scores` is every genome's fitness; `mean_score` their mean.
-8. `speciate()`, log an `"evolution"` event (`generation G: S species, best B, mean M`), then `reproduce()`.
-9. Build the `IterationStats` with `iteration=generation`, the scores, `entropy`, `mean_length` (`mean_survival_ticks`) and `win_rate` from the merged telemetry, `val_score`, timings, the curriculum's stage and opponents (or `num_players - 1`), `extra={"species", "hidden_nodes", "connections", "threshold"}`, `learner=champion.to_dict()`, the telemetry and the showcase. Append it to `history`.
-10. Update `best_mean_score`, call `curriculum.observe(mean_score)` and log a `"curriculum"` event on promotion.
+8. `speciate()`, remember `best_species_id` when the champion is the best ever, log an `"evolution"` event (`generation G: S species, best B, mean M`), then `reproduce()`.
+9. Build the `IterationStats` with `iteration=generation`, the scores, `entropy` and `mean_length` (`mean_survival_ticks`) from the merged telemetry, `win_rate` = the mean of `_last_wins` (game-level, over every evaluation game), `val_score`, `val_win_rate`, timings, the curriculum's stage and opponents (or `num_players - 1`), `extra={"species", "hidden_nodes", "connections", "threshold"}`, `learner=champion.to_dict()`, the telemetry and the showcase. Append it to `history`.
+10. Update `best_mean_score`. Then the curriculum: `judged_win` is `val_win_rate` when `validation_games > 0`, else `stats.win_rate`; call `curriculum.observe(mean_score, judged_win)` and log a `"curriculum"` event on promotion.
 11. `generation += 1` and return the stats.
 
 The population is replaced in step 8, so `scores` and `learner` describe the population that was just scored, and the champion survives as an elite only if its species is large enough.
@@ -272,7 +278,7 @@ There is no `neural` key. `GeneticTrainer.load_champion` leaves a dictionary gen
 def history_rows(self) -> list[dict]:
 ```
 
-`[stats.to_row() for stats in self.history]`. Because `history` is the `IterationStats` list, the rows have `iteration`, `mean_score`, `best_score`, `val_score` and `extra_species`, `extra_hidden_nodes`, `extra_connections`, `extra_threshold`. `training_run_plots` reads exactly these for its `"neat"` branch.
+`[stats.to_row() for stats in self.history]`. Because `history` is the `IterationStats` list, the rows have `iteration`, `mean_score`, `best_score`, `win_rate`, `val_score`, `val_win_rate` and `extra_species`, `extra_hidden_nodes`, `extra_connections`, `extra_threshold`. `training_run_plots` reads exactly these for its `"neat"` branch.
 
 ## How to use it / experiment
 
@@ -284,7 +290,7 @@ from hunger_games.training import NeatTrainer, NeatTrainerConfig
 
 config = SimulationConfig(width=80, height=80, max_days=8)
 trainer = NeatTrainer(config, NeatTrainerConfig(population_size=24, generations=10, seed=0))
-trainer.run(on_iteration=lambda s: print(s.iteration, round(s.best_score, 2), s.extra["species"], s.extra["hidden_nodes"]))
+trainer.run(on_iteration=lambda s: print(s.iteration, round(s.best_score, 2), round(s.val_win_rate, 2), s.extra["species"], s.extra["hidden_nodes"]))
 trainer.save_champion("neat_champion.json")
 ```
 
@@ -300,7 +306,7 @@ data = GeneticTrainer.load_champion("neat_champion.json")
 trainer = NeatTrainer(config, NeatTrainerConfig(seed=1), initial_genome=data["genome"])
 ```
 
-**With the curriculum.** `NeatTrainer(config, settings, curriculum=Curriculum(CurriculumConfig()))`. Every generation's games are sized to the stage, and `curriculum.png` shows the ladder.
+**With the curriculum.** `NeatTrainer(config, settings, curriculum=Curriculum(CurriculumConfig()))`. Every generation's games are sized to the stage, and `curriculum.png` shows the ladder. The champion moves up once it has won at least half of its validation games over the last five generations; there is no timeout by default.
 
 **Watch the champion.** `trainer.champion_brain()` gives a `NeatBrain`; the dashboard's Network tab draws the champion as a graph, columns by depth.
 
@@ -308,8 +314,10 @@ trainer = NeatTrainer(config, NeatTrainerConfig(seed=1), initial_genome=data["ge
 
 ## Gotchas
 
-- **Slow.** A default generation is 48 games, and each NEAT decision is a Python loop over genes. Expect a generation to take many times longer than a REINFORCE epoch on the same config. Lower `population_size` or the map size for experiments.
-- `validate` scores the generation's champion, while `champion` and `champion_brain` give the best genome ever. After a bad generation the two differ.
+- **Still slow per generation.** A default generation is 48 games. The forward pass is now compiled (about 30 microseconds per decision, see [../brain/neat.md](../brain/neat.md)), so the cost is the games themselves, not the network. Expect a generation to take many times longer than a REINFORCE epoch on the same config. Lower `population_size` or the map size for experiments.
+- `validate` scores the generation's champion, while `champion` and `champion_brain` give the best genome ever. After a bad generation the two differ, and so does the win rate the curriculum sees.
+- `win_rate` on the record is over every evaluation game of the population, not the champion's games. It says how often any genome's copies won. `val_win_rate` is the champion's.
+- With `validation_games=2` the validation win rate per generation is 0, 0.5 or 1. The curriculum averages five generations, so one lucky pair cannot promote on its own, but the signal is coarse. Raise `validation_games` for a steadier ladder.
 - Stagnation never removes the champion's species: `step()` records `best_species_id` after speciation, and `reproduce()` keeps that species alive however stale it is.
 - `evaluate` plays greedily (chaos 0). A genome's fitness is deterministic for a given seed, so `rounds_per_generation=1` scores each genome on one game. Raise it, or `learners_per_game`, for a steadier score.
 - The first generation is a single species with 48 members, so the elite rule fires once and 47 children are bred from the top `ceil(48 * 0.3) = 15` parents.
@@ -317,5 +325,5 @@ trainer = NeatTrainer(config, NeatTrainerConfig(seed=1), initial_genome=data["ge
 - `history` and `learning_history` are the same list, so `save_run` writes the same rows to `history.json` and `learning.json`.
 - `save_run(trainer, "neat", ...)` is the only method name whose x axis is `iteration` in `training_run_plots`; pass another name and the plots raise `KeyError`.
 - Champion files have no `neural` key. Code that reads `data["neural"]` without a `.get` fails on a NEAT champion.
-- `workers > 1` pickles a `LearnerSpec` holding the genome dictionary for every job, once per genome per round. Large genomes make that noticeable.
+- `workers > 1` pickles a `LearnerSpec` holding the genome dictionary for every job, once per genome per round. Large genomes make that noticeable. Each worker also recompiles the genome's evaluation plan, because the plan is a cache that is not part of `to_dict()`.
 - `initial_genome` must be a dictionary from `to_dict()`. A flat array raises inside `from_dict`.

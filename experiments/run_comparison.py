@@ -35,6 +35,33 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, default=20, help="iterations per variant")
     parser.add_argument("--time-budget", type=float, default=None, help="seconds per variant (optional)")
     parser.add_argument("--games", type=int, default=75, help="tournament games per champion")
+    parser.add_argument(
+        "--until-win",
+        type=float,
+        default=0.5,
+        help="stop a variant once it wins this share of validation games over --window iterations (negative: never)",
+    )
+    parser.add_argument("--window", type=int, default=5, help="iterations averaged for the win criterion")
+    parser.add_argument(
+        "--extend-iterations",
+        type=int,
+        default=0,
+        help="after every variant has had --iterations, keep training those short of the criterion for up to this many more",
+    )
+    parser.add_argument(
+        "--extend-hours", type=float, default=None, help="wall-clock cap per variant for that extension"
+    )
+    parser.add_argument(
+        "--save-replays-every",
+        type=int,
+        default=0,
+        help="save a replay of every Nth iteration's training game per variant (0 = never)",
+    )
+    parser.add_argument(
+        "--pairs",
+        action="store_true",
+        help="train a cold and a warm-started variant of every reward or evolution method (requires imitation in --methods)",
+    )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -87,6 +114,9 @@ def main() -> None:
                         warm_from=f"imitation_{init}" if can_warm else None,
                     )
                 )
+        elif args.pairs and method not in ("imitation", "neat") and "imitation" in methods:
+            variants.append(Variant(f"{method}_cold", method, curriculum=curriculum))
+            variants.append(Variant(f"{method}_warm", method, curriculum=curriculum, warm_from="imitation"))
         else:
             variants.append(Variant(method, method, curriculum=curriculum, warm_from="imitation" if can_warm else None))
     # Run.
@@ -96,6 +126,11 @@ def main() -> None:
             name=args.name,
             iterations=args.iterations,
             time_budget=args.time_budget,
+            until_win_rate=None if args.until_win < 0 else args.until_win,
+            win_window=args.window,
+            extended_iterations=args.extend_iterations,
+            extended_time_budget=None if args.extend_hours is None else args.extend_hours * 3600,
+            save_replays_every=args.save_replays_every,
             tournament_games=args.games,
             workers=args.workers,
             seed=args.seed,

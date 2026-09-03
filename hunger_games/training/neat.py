@@ -166,6 +166,8 @@ class NeatTrainer:
         # The best genome so far, and the id of the species it came from (never removed for stagnation).
         self.best: NeatGenome | None = None
         self.best_species_id: int | None = None
+        # Game-level wins of the last evaluation.
+        self._last_wins: list[int] = []
         self.best_mean_score = -np.inf
 
     @property
@@ -227,11 +229,13 @@ class NeatTrainer:
         counts = np.zeros(len(self.population))
         telemetry = []
         showcase = None
+        self._last_wins = []
         for job_index, result in enumerate(results):
             returns = [o["return"] for o in result["outcomes"].values()]
             totals[owners[job_index]] += float(np.mean(returns)) if returns else 0.0
             counts[owners[job_index]] += 1
             telemetry.append(result["telemetry"])
+            self._last_wins.append(int(result.get("learner_won", False)))
             if result.get("recording") is not None:
                 showcase = result["recording"]
             if on_progress is not None:
@@ -242,11 +246,11 @@ class NeatTrainer:
         # Done.
         return telemetry, showcase
 
-    def validate(self, genome: NeatGenome) -> float:
-        """Mean return of a genome on the fixed validation seeds."""
+    def validate(self, genome: NeatGenome) -> tuple[float, float]:
+        """Mean return and game-level win rate of a genome on the fixed validation seeds."""
         # None asked for.
         if self.neat.validation_games <= 0:
-            return 0.0
+            return 0.0, 0.0
         learners = self._learner_ids()
         jobs = [
             (
@@ -262,7 +266,8 @@ class NeatTrainer:
         ]
         results = self._play(jobs)
         returns = [o["return"] for result in results for o in result["outcomes"].values()]
-        return float(np.mean(returns)) if returns else 0.0
+        wins = [int(result.get("learner_won", False)) for result in results]
+        return (float(np.mean(returns)) if returns else 0.0), (float(np.mean(wins)) if wins else 0.0)
 
     # ------------------------------------------------------------ speciate
 
@@ -369,7 +374,7 @@ class NeatTrainer:
                 f"new champion: fitness {champion.fitness:.2f}, {champion.hidden_count} hidden nodes, {champion.enabled_count} connections",
             )
         # Validation.
-        val_score = self.validate(champion)
+        val_score, val_win_rate = self.validate(champion)
         # Merge telemetry.
         merged = BehaviorTelemetry.merge(telemetry) if telemetry else {}
         # Scores.
@@ -394,8 +399,9 @@ class NeatTrainer:
             best_score=float(champion.fitness),
             entropy=float(merged.get("entropy", 0.0)) if merged else 0.0,
             mean_length=float(merged.get("mean_survival_ticks", 0.0)) if merged else 0.0,
-            win_rate=float(merged.get("win_rate", 0.0)) if merged else 0.0,
+            win_rate=float(np.mean(self._last_wins)) if self._last_wins else 0.0,
             val_score=val_score,
+            val_win_rate=val_win_rate,
             seconds=time.time() - started,
             cumulative_seconds=time.time() - self._started,
             stage=self.curriculum.stage if self.curriculum else 0,
@@ -413,8 +419,9 @@ class NeatTrainer:
         self.history.append(stats)
         if mean_score > self.best_mean_score:
             self.best_mean_score = mean_score
-        # Curriculum.
-        if self.curriculum is not None and self.curriculum.observe(mean_score):
+        # Curriculum (judged on validation wins when there are validation games).
+        judged_win = val_win_rate if self.neat.validation_games > 0 else stats.win_rate
+        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win):
             self.events.add(
                 "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
             )

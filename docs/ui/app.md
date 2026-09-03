@@ -573,6 +573,7 @@ The individual settings inside `im_group`, `ga_group`, `neat_group` and `rl_grou
 - **Add a tutorial step.** Append `("10. My step", "What to do.", "mystep")` to `TUTORIAL_STEPS` and an `elif name == "mystep":` branch to `_tutorial_action` that ends with `dpg.set_value("left_tabs", "tab_...")`.
 
 ## Gotchas
+- **Load champion into the learner slots and watch** (Train tab) puts a `champion.json` into the six evenly spread learner slots (`learner_ids(num_players, 6)`), resets every other tribute to the voting brain with no genome, starts a new game at 8 ticks per second and opens the Network tab: the same matchup the tournament scores. Its callback is `_load_champion_learners(path)`.
 
 - The dashboard starts on `imitation` and with "start from the current champion" ticked. A second Start of any method continues from the first run's champion unless you untick the box.
 - The `perf_*` series tags are historical: `perf_train` draws the mean score, `perf_val` the validation score and `perf_mean` the best score. Read the legend, not the tag.

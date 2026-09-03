@@ -14,7 +14,7 @@ This file pretrains the neural brain by copying the voting brain. The technique 
 
 **The recommended flow.** Run imitation first. Then hand its champion to any other trainer through `initial_genome` (a "warm start"). The dashboard's "start from the current champion" tick box does exactly that, and the method comparison's `warm_from` does it in scripts.
 
-Every epoch logs training and validation loss and accuracy, plays greedy validation games, and appends the shared `IterationStats` to `learning_history`, so the dashboard and the shared learning curves work exactly as for the other trainers.
+Every epoch logs training and validation loss and accuracy, plays greedy validation games, and appends the shared `IterationStats` to `learning_history`, so the dashboard and the shared learning curves work exactly as for the other trainers. The validation win rate is game-level: a validation game is won when any student copy was the victor.
 
 ## Concepts you need
 
@@ -31,6 +31,8 @@ Every epoch logs training and validation loss and accuracy, plays greedy validat
 **Train and validation split.** A slice of the demonstrations is held out and never trained on. The champion is chosen by validation loss.
 
 **Placement.** `result.players[i].placement` is 1 for the victor, 2 for the runner-up, and so on. `winners_top=3` keeps the decisions of the three best-placed tributes of each demonstration game.
+
+**Game-level win.** The student drives several copies of itself in a validation game, and only one tribute can be the victor. `play_rl_episode` reports `learner_won`, true when any copy won. `val_win_rate` is the fraction of validation games with that flag.
 
 ## Walkthrough
 
@@ -75,7 +77,7 @@ The trainer's own record per epoch, kept in `trainer.history`.
 | `train_accuracy` | `float` | Fraction of training demonstrations the student gets right |
 | `val_accuracy` | `float` | Fraction of held-out demonstrations the student gets right |
 | `val_survival` | `float` | Mean ticks the student survived in the validation games |
-| `val_win_rate` | `float` | Fraction of validation learner outcomes that won |
+| `val_win_rate` | `float` | Fraction of validation games a student copy won (game-level) |
 | `seconds` | `float` | Seconds this epoch took |
 | `cumulative_seconds` | `float` | Seconds since training started |
 | `genome` | `np.ndarray` (default `None`, `repr=False`) | The student's genome after this epoch (a copy) |
@@ -130,7 +132,7 @@ def __init__(self, config: SimulationConfig, imitation: ImitationConfig, scenari
 
 Stores `config`, `imitation`, `curriculum` and `scenario`; makes `events = EventLog()`, an empty `learning_history` and `best_mean_score = -inf`. Seeds `self.rng` from `imitation.seed`. The student is `NeuralBrain(chaos=0.0, config=config.neural, rng=self.rng).network`. If `initial_genome` is given it is loaded with `set_genome`. The optimiser is `Adam(self.policy, imitation.learning_rate)`. Also `train_x`, `train_y`, `val_x`, `val_y` (all `None` until `collect()`), `history`, `epoch = 0`, `_stop`, `_started`, `best_genome = None` and `best_val_loss = inf`.
 
-The `curriculum` argument is accepted so every trainer has the same constructor, and stored on `self.curriculum`. No method in this file reads it: the roster of the validation games is always `config.num_players`, and the shared record always says `stage=0`.
+The `curriculum` argument is accepted so every trainer has the same constructor, and stored on `self.curriculum`. No method in this file reads it: the roster of the validation games is always `config.num_players`, the shared record always says `stage=0`, and `observe` is never called.
 
 #### `settings` (property)
 
@@ -196,11 +198,11 @@ def step_epoch(self, on_progress: Callable[[int, int], None] | None = None) -> I
 4. If `val_loss` beats `best_val_loss` (or no best yet), store a copy of the genome as `best_genome`.
 5. `val_survival, val_win_rate, telemetry, showcase, val_returns = self._validate()`.
 6. Build `ImitationStats`, append it to `history`, increment `epoch`.
-7. Build the shared `IterationStats`: `scores` are the validation returns (`mean_score` their mean, `best_score` their max), `entropy` is the student's mean entropy on the held-out demonstrations (uniform if there are none), `mean_length = val_survival`, `win_rate = val_win_rate`, `val_score` the same mean return, `stage=0`, `opponents = num_players - 1`, `extra={"train_loss", "val_loss", "train_accuracy", "val_accuracy"}`, `learner = stats.genome`. Append it to `learning_history`.
+7. Build the shared `IterationStats`: `scores` are the validation returns (`mean_score` their mean, `best_score` their max), `entropy` is the student's mean entropy on the held-out demonstrations (uniform if there are none), `mean_length = val_survival`, `win_rate = val_win_rate`, `val_score` the same mean return, `val_win_rate = val_win_rate`, `stage=0`, `opponents = num_players - 1`, `extra={"train_loss", "val_loss", "train_accuracy", "val_accuracy"}`, `learner = stats.genome`. Append it to `learning_history`.
 8. Log a `"rollout"` event (`epoch E: accuracy A, loss L, validation score V`) and a `"record"` event when `mean_score` beats `best_mean_score`.
 9. Return the `ImitationStats`.
 
-Because `scores` come from validation games, `mean_score` and `val_score` are the same number here.
+Because `scores` come from validation games, `mean_score` and `val_score` are the same number here, and so are `win_rate` and `val_win_rate`. This trainer plays no training games.
 
 #### `_validate()`
 
@@ -208,7 +210,15 @@ Because `scores` come from validation games, `mean_score` and `val_score` are th
 def _validate(self) -> tuple[float, float, dict, Recording | None, list[float]]:
 ```
 
-Plays the student greedily on the fixed validation seeds. Returns `(0.0, 0.0, {}, None, [])` if `validation_games <= 0`. Otherwise one `play_rl_episode` job per game, passing the student's genome as a plain array (the episode player wraps it in a neural `LearnerSpec`), `greedy=True`, and `record` only for the first game. From every learner outcome it averages `survival` and `won`, merges the telemetry, and returns the first episode's recording and the list of every learner's `return`. The returns are what fill the shared `scores`.
+Plays the student greedily on the fixed validation seeds. Returns `(0.0, 0.0, {}, None, [])` if `validation_games <= 0`. Otherwise one `play_rl_episode` job per game, passing the student's genome as a plain array (the episode player wraps it in a neural `LearnerSpec`), `greedy=True`, and `record` only for the first game. Then:
+
+| Returned value | How it is computed |
+| --- | --- |
+| `survival` | Mean `survival` over every learner outcome of every game |
+| `win_rate` | Mean of `episode["learner_won"]` over the games: a game is won when any student copy was the victor |
+| `telemetry` | `BehaviorTelemetry.merge` of every game's summary |
+| The recording | The first episode's `recording` |
+| The returns | Every learner outcome's `return`, which fill the shared `scores` |
 
 #### `run(on_epoch=None, on_progress=None)`
 
@@ -270,7 +280,7 @@ from hunger_games.training import ImitationConfig, ImitationTrainer, PPOConfig, 
 
 config = SimulationConfig(seed=0)
 student = ImitationTrainer(config, ImitationConfig(seed=0))
-student.run(on_epoch=lambda s: print(s.epoch, f"acc {s.val_accuracy:.2f}", f"survival {s.val_survival:.0f}"))
+student.run(on_epoch=lambda s: print(s.epoch, f"acc {s.val_accuracy:.2f}", f"survival {s.val_survival:.0f}", f"won {s.val_win_rate:.0f}"))
 save_run(student, "imitation", "student")
 
 trainer = PPOTrainer(config, PPOConfig(seed=0), initial_genome=student.champion)
@@ -287,6 +297,7 @@ trainer.run()
 | `val_loss` | Falls, then flattens. Rising while `train_loss` still falls is overfitting |
 | `train_accuracy`, `val_accuracy` | Rise together. About 0.8 after 30 epochs with the defaults |
 | `val_survival` (and `mean_length` in the shared record) | Rises early. This is the number that says the instincts work |
+| `val_win_rate` | With one validation game it is 0 or 1 per epoch. Raise `validation_games` to see a fraction |
 | `mean_score` in the shared record | The validation episode return; comparable with the other methods' curves |
 
 **Copy a chaotic teacher.** `teacher_chaos=0.5` makes the labels noisy: accuracy drops even though the loss still falls.
@@ -295,15 +306,15 @@ trainer.run()
 
 ## Gotchas
 
-- **Validation loss picks the champion.** A later epoch with better survival but a slightly higher validation loss is not the champion. `history[-1].genome` is the latest student.
+- **Validation loss picks the champion.** A later epoch with better survival or more wins but a slightly higher validation loss is not the champion. `history[-1].genome` is the latest student.
 - **`validation_fraction=0.0` freezes the champion at epoch 0.** With an empty validation set `_loss_and_accuracy` returns `0.0`, which beats `inf` once and never again.
 - **`demonstration_games` must be at least 1.** With 0 games `collect()` calls `np.concatenate` on an empty list and raises.
 - **`winners_top` can empty a game.** If no tribute has a placement in the range (for example every game ends in a draw at the day cutoff with placements above `winners_top`), that game contributes zero rows. With every game empty, `collect()` fails on the concatenation or the split.
 - **Demonstrations are collected once.** `run()` twice trains twice on the same data. Call `collect()` again for fresh games.
 - The curriculum is stored but never applied. Pass it for uniformity, not for effect.
-- `validation_games=0` gives an empty `scores` list, so `mean_score`, `best_score` and `val_score` are `0.0` and the shared score chart is flat.
+- `validation_games=0` gives an empty `scores` list, so `mean_score`, `best_score`, `val_score` and both win rates are `0.0` and the shared score chart is flat.
 - The showcase is a *greedy validation* game, not a training game.
-- `val_win_rate` is a fraction over learner outcomes, so with 6 learners and 1 validation game it can only be 0 or about 0.17.
+- `val_win_rate` is a fraction over games, and the default is one game, so the per-epoch value is 0 or 1. The method comparison averages it over `win_window` epochs for its criterion, but with one game per epoch that is still a mean of five coin-flip-like values. Set `validation_games` higher when the win rate matters.
 - The student's `NeuralBrain` is built with chaos 0, but only its `.network` is kept and training uses `softmax` at temperature 1 on the raw logits.
 - `play_rl_episode` builds learners through `build_learner`, so `config.endgame_instinct` does not apply to the student in validation games. It does apply to the teacher during demonstrations, through `create_brain`.
 - The same `spawn` rules as the other trainers apply when `workers > 1`.
