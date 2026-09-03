@@ -228,9 +228,14 @@ class MethodComparison:
             # The win criterion: a majority of validation games over the window, at the final curriculum stage.
             recent = trainer.learning_history[-self.comparison.win_window :]
             at_final_stage = trainer.curriculum is None or trainer.curriculum.finished
+            # Every iteration in the window must have been played at the final stage. Each record carries the stage
+            # it was played at (promotion happens after the record), so the wins that earned the last promotion
+            # cannot also count as wins against the full field.
+            played_at_final = trainer.curriculum is None or all(s.stage == trainer.curriculum.stage for s in recent)
             if (
                 self.comparison.until_win_rate is not None
                 and at_final_stage
+                and played_at_final
                 and len(recent) >= self.comparison.win_window
                 and float(np.mean([s.val_win_rate for s in recent])) >= self.comparison.until_win_rate
             ):

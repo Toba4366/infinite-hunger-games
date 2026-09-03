@@ -21,7 +21,7 @@ python experiments/run_comparison.py --initializers xavier_uniform,he_uniform,ze
 
 **Iterations.** One `step()` of a trainer: an epoch for imitation, REINFORCE and PPO, a generation for the genetic algorithm and NEAT. `--iterations` is the most a variant will train.
 
-**Win criterion.** A variant stops early once its validation win rate over the last `--window` iterations reaches `--until-win`, at the final curriculum stage. A win is game-level: a game is won when any learner copy was the victor. The iterations and seconds it took are recorded in the results table.
+**Win criterion.** A variant stops early once its validation win rate over the last `--window` iterations reaches `--until-win`, with every one of those iterations played at the final curriculum stage (the wins that earned the last promotion do not count). A win is game-level: a game is won when any learner copy was the victor. The iterations and seconds it took are recorded in the results table.
 
 **Extension.** With `--extend-iterations`, a variant that has not met the criterion by `--iterations` is not cut off for good: once every variant has had its first budget, the slow ones keep training (same population or weights) for up to that many more iterations, or `--extend-hours` each. Quick variants finish first, slow ones are measured for how long they really need, and every final network enters the tournament.
 

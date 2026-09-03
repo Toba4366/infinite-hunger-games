@@ -5,13 +5,13 @@
 
 ## Purpose
 
-`MethodComparison` is the experiment that answers the project's research question, and it runs for hours at full size. This file runs it at the smallest size that still exercises every stage: two variants train for one iteration each, the second warm-starts from the first, both champions fight a two-game tournament, and the run folder gets its table, plots, LaTeX and report. One extra assertion pins down the lines-of-code measure. A second test checks the extension phase: a variant that misses the win criterion in its first budget keeps training afterwards.
+`MethodComparison` is the experiment that answers the project's research question, and it runs for hours at full size. This file runs it at the smallest size that still exercises every stage: two variants train for one iteration each, the second warm-starts from the first, both champions fight a two-game tournament, and the run folder gets its table, plots, LaTeX and report. One extra assertion pins down the lines-of-code measure. A second test checks the extension phase: a variant that misses the win criterion in its first budget keeps training afterwards. A third, with stub objects instead of real trainers, pins down the rule that the criterion window must be played at the final curriculum stage.
 
 Without this test a change to a trainer's `champion_spec`, to `IterationStats.to_row`, or to the plot names would only show up at the end of a long real run.
 
 ## Concepts you need
 
-**Test discovery.** Two `test_*` functions. Each takes the `tmp_path` fixture so the run folder lands in a temporary directory.
+**Test discovery.** Three `test_*` functions. The first two take the `tmp_path` fixture so the run folder lands in a temporary directory; the third needs no files.
 
 **The extension phase.** `ComparisonConfig.extended_iterations` lets variants that have not met the win criterion after `iterations` keep training, with the same trainer, once every variant has had its first budget. See [../research/comparison.md](../research/comparison.md).
 
@@ -66,6 +66,16 @@ Without this test a change to a trainer's `champion_spec`, to `IterationStats.to
 
 **`assert "extended" in (folder / "report.md").read_text()`.** The criterion table in the report has its extension column and note.
 
+### `_StubCurriculum`, `_StubTrainer` and `test_win_criterion_needs_a_full_window_at_the_final_stage()`
+
+**Why stubs.** The rule under test is about bookkeeping order, not about learning, so real trainers would only add minutes and randomness. `_StubCurriculum(final_stage=4)` starts at stage 3 and reports `finished` once its stage reaches 4. `_StubTrainer.step()` appends an `IterationStats` that wins every validation game (`val_win_rate=1.0`) and records the stage it was "played" at, then, on the fifth step only, promotes the curriculum to stage 4. That mirrors the real trainers, which record the iteration before calling `Curriculum.observe`.
+
+**`reached = comparison._train_steps(Variant("x", "reinforce"), trainer, 20, time.time(), None, None)`.** A `MethodComparison` with no variants and `ComparisonConfig(until_win_rate=0.5, win_window=5)` runs up to 20 stub steps with no deadline and no progress callback.
+
+**`assert reached[0] == 10`.** Without the fix, the five stage-3 wins that earned the promotion would satisfy the window the moment `finished` became true, and `reached` would be 5. With it, the window must hold five iterations recorded at stage 4, which takes five more steps.
+
+**`assert all(s.stage == 4 for s in trainer.learning_history[-5:])`.** The last five records really were at the final stage, so the criterion was judged against the full field.
+
 ## How to use it / experiment
 
 - Add a third variant, for example `Variant("ppo_warm", "ppo", PPOConfig(epochs=1, episodes_per_epoch=1, learners_per_game=4, validation_games=1, update_epochs=1), warm_from="imitation")`, to check that the PPO subclass fits the same contract.
@@ -77,5 +87,6 @@ Without this test a change to a trainer's `champion_spec`, to `IterationStats.to
 - **A warm start that silently fails still passes this test.** The assertions check outputs, not that the REINFORCE policy began as the imitation champion. See `test_warm_starts_begin_from_the_given_genome` in [test_imitation.md](test_imitation.md) for that.
 - **`results_dir` is a `Path` here** although the dataclass types it as `str`; `make_run_dir` accepts both.
 - **Four learners on 24 tributes** sit in slots 0, 6, 12 and 18, so the tournament means are over 2 games times 4 learners, 8 learner episodes.
+- **The stub test calls the private `_train_steps`.** It is the only way to test the criterion rule without training; if that method's signature changes, update the stub call too.
 - **The extension test relies on `until_win_rate=0.0`.** A threshold of zero is always met once the window is full, which is what makes the test deterministic; a positive threshold would depend on whether the tiny policy happened to win.
 - **The test writes real PNGs**, so a matplotlib backend problem shows up here as a failure rather than a skipped chart.

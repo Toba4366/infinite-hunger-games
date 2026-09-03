@@ -1,8 +1,11 @@
 """Tests for the method comparison and its tournament."""
 
+import time
+
 from hunger_games.config import SimulationConfig
 from hunger_games.research.comparison import ComparisonConfig, MethodComparison, Variant, count_lines
 from hunger_games.training import ImitationConfig, RLConfig
+from hunger_games.training.common import IterationStats
 
 
 def test_comparison_trains_fights_and_reports(tmp_path):
@@ -79,3 +82,61 @@ def test_comparison_extends_variants_that_miss_the_criterion(tmp_path):
     # The first-budget snapshot and the final run folder are both saved.
     assert (folder / "runs_first_budget").exists() and (folder / "runs").exists()
     assert "extended" in (folder / "report.md").read_text()
+
+
+class _StubCurriculum:
+    """A curriculum whose stage the test advances by hand."""
+
+    def __init__(self, final_stage: int) -> None:
+        """Start at the final stage minus one, so one promotion finishes it."""
+        self.stage = final_stage - 1
+        self.final_stage = final_stage
+
+    @property
+    def finished(self) -> bool:
+        """True once the stage has reached the final index."""
+        return self.stage >= self.final_stage
+
+
+class _StubTrainer:
+    """A trainer that wins every validation game and is promoted to the final stage on its fifth step."""
+
+    def __init__(self) -> None:
+        """Empty history, a curriculum one promotion short of finished."""
+        self.learning_history: list[IterationStats] = []
+        self.curriculum = _StubCurriculum(final_stage=4)
+
+    def step(self) -> IterationStats:
+        """Record a winning iteration at the current stage, then promote on the fifth."""
+        stats = IterationStats(
+            iteration=len(self.learning_history),
+            scores=[1.0],
+            mean_score=1.0,
+            best_score=1.0,
+            entropy=0.0,
+            mean_length=10.0,
+            win_rate=1.0,
+            val_score=1.0,
+            seconds=0.0,
+            cumulative_seconds=0.0,
+            val_win_rate=1.0,
+            stage=self.curriculum.stage,
+            opponents=11 if self.curriculum.stage == 3 else 23,
+        )
+        self.learning_history.append(stats)
+        # Promotion happens after the record, as in the real trainers.
+        if len(self.learning_history) == 5:
+            self.curriculum.stage += 1
+        return stats
+
+
+def test_win_criterion_needs_a_full_window_at_the_final_stage():
+    """The wins that earned the final promotion do not count; the window must be played at the final stage."""
+    comparison = MethodComparison(
+        SimulationConfig(seed=0), ComparisonConfig(name="t", until_win_rate=0.5, win_window=5), []
+    )
+    trainer = _StubTrainer()
+    reached = comparison._train_steps(Variant("x", "reinforce"), trainer, 20, time.time(), None, None)
+    # Five winning iterations at stage 3 promote the trainer at step 5; five more at stage 4 meet the criterion.
+    assert reached[0] == 10
+    assert all(s.stage == 4 for s in trainer.learning_history[-5:])

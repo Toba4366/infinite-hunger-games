@@ -49,6 +49,13 @@ the README's claims, and test whether warm starts really end better.
   tables show iterations trained, extended iterations and seconds. The full
   experiment script extends up to 1000 iterations or 2 hours per variant.
 
+### Fixed
+- The win criterion counted the window that earned the final curriculum
+  promotion as wins at the final stage, so a warm variant was declared
+  "reached" the moment it was promoted to 23 opponents without playing a
+  single iteration there. The window must now consist of iterations played
+  at the final stage.
+
 ### Changed
 - `MethodComparison.train_all` passes each iteration's `IterationStats` to the
   progress callback and `run` prints stage, opponents, validation win rate,
