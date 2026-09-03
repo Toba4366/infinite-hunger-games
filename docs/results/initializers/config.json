@@ -1,0 +1,143 @@
+{
+  "base_config": {
+    "width": 120,
+    "height": 120,
+    "shape": "open_field",
+    "layout": "ring",
+    "allow_water_podiums": true,
+    "num_players": 24,
+    "brain_name": "voting",
+    "start_thirst_min": 1.0,
+    "start_hunger_min": 1.0,
+    "start_health_min": 1.0,
+    "career_districts": [
+      1,
+      2,
+      4
+    ],
+    "chaos": 0.5,
+    "seed": null,
+    "ticks_per_day": 24,
+    "max_days": 24,
+    "vision_radius": 8,
+    "landmark_radius": 30,
+    "thirst_days": 3.0,
+    "hunger_days": 7.0,
+    "sponsors_enabled": true,
+    "sponsor_gift_chance": 0.5,
+    "gamemaker_enabled": true,
+    "quiet_days_before_intervention": 1.0,
+    "intervention_days": 6.0,
+    "cannon_and_sky": true,
+    "endgame_instinct": false,
+    "noise": {
+      "scale": 40.0,
+      "octaves": 5,
+      "persistence": 0.5,
+      "lacunarity": 2.0
+    },
+    "terrain": {
+      "water_threshold": 0.25,
+      "sand_size": 0.1,
+      "grass_size": 0.5
+    },
+    "neural": {
+      "hidden_layers": [
+        64,
+        32
+      ],
+      "activation": "tanh",
+      "initializer": "xavier_uniform",
+      "init_scale": 0.05,
+      "sparsity": 0.1
+    },
+    "reward": {
+      "survive_tick": 0.01,
+      "win": 5.0,
+      "death": -3.0,
+      "kill": 1.0,
+      "damage_taken": -2.0,
+      "need_gain": 0.5,
+      "approach": 0.0,
+      "placement": 2.0,
+      "discount": 0.98
+    }
+  },
+  "comparison": {
+    "name": "initializers",
+    "iterations": 80,
+    "time_budget": null,
+    "until_win_rate": 0.5,
+    "win_window": 5,
+    "extended_iterations": 0,
+    "extended_time_budget": null,
+    "tournament_games": 75,
+    "save_replays_every": 0,
+    "tournament_learners": 6,
+    "workers": 6,
+    "seed": 0,
+    "results_dir": "results"
+  },
+  "variants": [
+    {
+      "name": "imitation_xavier_uniform",
+      "method": "imitation",
+      "settings": null,
+      "config_overrides": {
+        "neural.initializer": "xavier_uniform"
+      },
+      "curriculum": false,
+      "warm_from": null
+    },
+    {
+      "name": "imitation_he_uniform",
+      "method": "imitation",
+      "settings": null,
+      "config_overrides": {
+        "neural.initializer": "he_uniform"
+      },
+      "curriculum": false,
+      "warm_from": null
+    },
+    {
+      "name": "imitation_zeros",
+      "method": "imitation",
+      "settings": null,
+      "config_overrides": {
+        "neural.initializer": "zeros"
+      },
+      "curriculum": false,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_xavier_uniform",
+      "method": "ppo",
+      "settings": null,
+      "config_overrides": {
+        "neural.initializer": "xavier_uniform"
+      },
+      "curriculum": true,
+      "warm_from": "imitation_xavier_uniform"
+    },
+    {
+      "name": "ppo_he_uniform",
+      "method": "ppo",
+      "settings": null,
+      "config_overrides": {
+        "neural.initializer": "he_uniform"
+      },
+      "curriculum": true,
+      "warm_from": "imitation_he_uniform"
+    },
+    {
+      "name": "ppo_zeros",
+      "method": "ppo",
+      "settings": null,
+      "config_overrides": {
+        "neural.initializer": "zeros"
+      },
+      "curriculum": true,
+      "warm_from": "imitation_zeros"
+    }
+  ]
+}

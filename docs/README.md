@@ -9,6 +9,7 @@ you want to click before you read.
 - [ui/README.md](ui/README.md): using the game makers' dashboard.
 - [research/README.md](research/README.md): the research toolkit and which chart answers which question.
 - [output.md](output.md): the result files.
+- [results/README.md](results/README.md): the runs behind the README's claims, with their reports, numbers and charts.
 - [../CHANGELOG.md](../CHANGELOG.md): what changed and why, release by release.
 
 ## Package: `hunger_games/`
@@ -73,6 +74,7 @@ you want to click before you read.
 | [experiments/run_rl.md](experiments/run_rl.md) | `experiments/run_rl.py` | A policy-gradient training run from the command line |
 | [experiments/run_sweep.md](experiments/run_sweep.md) | `experiments/run_sweep.py` | A parameter sweep from the command line |
 | [experiments/run_comparison.md](experiments/run_comparison.md) | `experiments/run_comparison.py` | Compare methods, sizes or initializers and run the tournament |
+| [experiments/scripts.md](experiments/scripts.md) | `experiments/run_full.sh`, `experiments/run_sensitivity.sh` | The full experiment and the cold-start sensitivity sweep as one command each |
 
 ## Tests: `tests/`
 
@@ -91,6 +93,7 @@ you want to click before you read.
 | [tests/test_imitation.md](tests/test_imitation.md) | `test_imitation.py` | Imitation pretraining and warm starts |
 | [tests/test_methods.md](tests/test_methods.md) | `test_methods.py` | Shared stats, NEAT, PPO, the curriculum |
 | [tests/test_comparison.md](tests/test_comparison.md) | `test_comparison.py` | The method comparison and tournament |
+| [tests/test_champion.md](tests/test_champion.md) | `test_champion.py` | Stage-aware champion selection |
 
 ## Results: `output/`
 

@@ -51,7 +51,14 @@ from hunger_games.research.telemetry import BehaviorTelemetry
 from hunger_games.scenario import Scenario
 
 # Shared pieces.
-from hunger_games.training.common import Curriculum, EventLog, IterationStats, LearnerSpec, learner_ids
+from hunger_games.training.common import (
+    Curriculum,
+    EventLog,
+    IterationStats,
+    LearnerSpec,
+    champion_key,
+    learner_ids,
+)
 
 # The episode player.
 from hunger_games.training.reinforce import play_rl_episode
@@ -165,6 +172,8 @@ class NeatTrainer:
         self._started: float | None = None
         # The best genome so far, and the id of the species it came from (never removed for stagnation).
         self.best: NeatGenome | None = None
+        # The best genome's (stage, validation win rate, validation score) key.
+        self.best_key: tuple[int, float, float] | None = None
         self.best_species_id: int | None = None
         # Game-level wins of the last evaluation.
         self._last_wins: list[int] = []
@@ -365,16 +374,19 @@ class NeatTrainer:
         self._apply_curriculum()
         # Evaluate.
         telemetry, showcase = self.evaluate(on_progress)
-        # Champion.
+        # This generation's champion by training fitness.
         champion = max(self.population, key=lambda g: g.fitness)
-        if self.best is None or champion.fitness > self.best.fitness:
+        # Validation.
+        val_score, val_win_rate = self.validate(champion)
+        # The overall champion: highest curriculum stage, then validation wins, then validation score.
+        key = champion_key(self.curriculum.stage if self.curriculum is not None else 0, val_win_rate, val_score)
+        if self.best is None or self.best_key is None or key > self.best_key:
             self.best = champion.copy()
+            self.best_key = key
             self.events.add(
                 "record",
                 f"new champion: fitness {champion.fitness:.2f}, {champion.hidden_count} hidden nodes, {champion.enabled_count} connections",
             )
-        # Validation.
-        val_score, val_win_rate = self.validate(champion)
         # Merge telemetry.
         merged = BehaviorTelemetry.merge(telemetry) if telemetry else {}
         # Scores.
@@ -382,8 +394,8 @@ class NeatTrainer:
         mean_score = float(np.mean(scores))
         # Speciate and reproduce.
         self.speciate()
-        # Remember which species the champion belongs to, so stagnation never removes it.
-        if champion.fitness >= (self.best.fitness if self.best is not None else -np.inf):
+        # Remember which species the overall champion belongs to, so stagnation never removes it.
+        if self.best_key is not None and key >= self.best_key:
             self.best_species_id = champion.species
         species_count = len(self.species)
         self.events.add(

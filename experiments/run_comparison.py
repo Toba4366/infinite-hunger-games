@@ -8,6 +8,7 @@ python experiments/run_comparison.py --initializers xavier_uniform,he_uniform,ze
 
 # Command-line parsing.
 import argparse
+import ast
 
 # Make the package importable when run from the repo root.
 import sys
@@ -18,12 +19,31 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Settings, the comparison.
 from hunger_games.config import SimulationConfig  # noqa: E402
-from hunger_games.research.comparison import ComparisonConfig, MethodComparison, Variant  # noqa: E402
+from hunger_games.research.comparison import METHODS, ComparisonConfig, MethodComparison, Variant  # noqa: E402
 
 
 def parse_layers(text: str) -> tuple[int, ...]:
     """'64x32' -> (64, 32)."""
     return tuple(int(part) for part in text.split("x") if part)
+
+
+def parse_settings(specs: list[str]) -> list[tuple[str, object]]:
+    """Turn `["learning_rate=1e-3,3e-3", "entropy_bonus=0.01"]` into `[("learning_rate", 0.001), ...]`."""
+    # Every (name, value) pair, in the order given.
+    pairs: list[tuple[str, object]] = []
+    for spec in specs:
+        # The field name and its comma-separated values.
+        name, _, values = spec.partition("=")
+        if not name or not values:
+            raise SystemExit(f"--set expects NAME=V1,V2,... (got {spec!r})")
+        for raw in values.split(","):
+            # Numbers, booleans, tuples and lists parse as Python literals; anything else stays a string.
+            try:
+                value = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                value = raw
+            pairs.append((name.strip(), value))
+    return pairs
 
 
 def main() -> None:
@@ -76,6 +96,14 @@ def main() -> None:
     parser.add_argument(
         "--initializers", default=None, help="initializer variants to compare, e.g. xavier_uniform,he_uniform,zeros"
     )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="NAME=V1,V2,...",
+        help="sweep one trainer setting: one variant per value for every method whose settings have that field "
+        "(imitation keeps a single plain variant so the others can warm-start from it); repeatable",
+    )
     parser.add_argument("--size", type=int, default=120, help="arena size")
     parser.add_argument("--days", type=int, default=SimulationConfig.max_days)
     parser.add_argument("--name", default="comparison")
@@ -86,13 +114,35 @@ def main() -> None:
     # Variants: methods, crossed with sizes or initializers when asked.
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     variants = []
+    # A --set field no method's settings have would otherwise create no variants and fail silently.
+    for name, _ in parse_settings(args.set):
+        if not any(hasattr(METHODS[m][1](), name) for m in methods):
+            raise SystemExit(f"--set {name}: none of {', '.join(methods)} has a setting called {name!r}")
     # Imitation variants must come first so the others can warm-start from them.
     ordered = sorted(methods, key=lambda m: m != "imitation")
     for method in ordered:
         curriculum = args.curriculum and method in ("reinforce", "ppo", "genetic", "neat")
         # A warm start comes from the imitation variant with the same size or initializer suffix.
         can_warm = args.warm and method not in ("imitation", "neat") and "imitation" in methods
-        if args.sizes:
+        if args.set:
+            # One variant per (setting, value) for the methods whose settings dataclass has that field.
+            if method == "imitation":
+                variants.append(Variant(method, method, curriculum=curriculum))
+            for name, value in parse_settings(args.set):
+                settings = METHODS[method][1]()
+                if not hasattr(settings, name):
+                    continue
+                setattr(settings, name, value)
+                variants.append(
+                    Variant(
+                        f"{method}_{name}_{value}",
+                        method,
+                        settings,
+                        curriculum=curriculum,
+                        warm_from="imitation" if can_warm else None,
+                    )
+                )
+        elif args.sizes:
             for size in args.sizes.split(","):
                 variants.append(
                     Variant(

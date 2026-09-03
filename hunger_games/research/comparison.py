@@ -125,6 +125,17 @@ class ComparisonConfig:
     results_dir: str = "results"
 
 
+def rolling_mean(values: list[float], window: int) -> list[float]:
+    """Each value averaged with the ones before it, up to `window` long (the first entries average fewer)."""
+    # One output per input.
+    out: list[float] = []
+    for i in range(len(values)):
+        # The last `window` values up to and including this one.
+        chunk = values[max(0, i - window + 1) : i + 1]
+        out.append(float(np.mean(chunk)))
+    return out
+
+
 def set_overrides(config: SimulationConfig, overrides: dict) -> SimulationConfig:
     """Copy a config with dotted overrides applied."""
     # Copy.
@@ -172,6 +183,8 @@ class MethodComparison:
         self.extended: dict[str, int] = {}
         # Trainers that missed the criterion in the first budget, kept alive for the extension.
         self._pending: dict[str, Any] = {}
+        # When each variant's first budget ended, so the extension can subtract the wait from the trainer's clock.
+        self._finished_at: dict[str, float] = {}
         self.run_dir: Path | None = None
         self._stop = False
 
@@ -254,6 +267,7 @@ class MethodComparison:
         """Record a variant's results and save its run folder under `<run>/<subdir>`."""
         self.criterion[variant.name] = reached
         self.train_seconds[variant.name] = time.time() - started
+        self._finished_at[variant.name] = time.time()
         self.learning[variant.name] = [s.to_row() for s in trainer.learning_history]
         self.champions[variant.name] = trainer.champion_spec()
         if self.run_dir is not None:
@@ -287,6 +301,11 @@ class MethodComparison:
                 on_progress(variant.name, before, "extending: the win criterion was not met within the first budget")
             # The clock keeps counting from the variant's first iteration, so seconds to criterion stay comparable.
             started = time.time() - self.train_seconds[variant.name]
+            # The trainer's own clock (`cumulative_seconds` in its records) ran while it waited for the other
+            # variants; move its start forward by the wait so the time charts show training time only.
+            idle = time.time() - self._finished_at[variant.name]
+            if getattr(trainer, "_started", None) is not None:
+                trainer._started += idle
             deadline = (
                 None
                 if self.comparison.extended_time_budget is None
@@ -463,20 +482,26 @@ class MethodComparison:
         )
         plots.overlay_curves(
             {
-                name: ([r["iteration"] for r in rows], [r["val_win_rate"] for r in rows])
+                name: (
+                    [r["iteration"] for r in rows],
+                    rolling_mean([r["val_win_rate"] for r in rows], self.comparison.win_window),
+                )
                 for name, rows in self.learning.items()
             },
-            "Validation win rate per iteration (games won by the learner)",
+            f"Validation win rate per iteration (rolling mean over {self.comparison.win_window})",
             "iteration",
             "win rate",
             folder / "win_rate_by_method.png",
         )
         plots.overlay_curves(
             {
-                name: ([r["cumulative_seconds"] for r in rows], [r["val_win_rate"] for r in rows])
+                name: (
+                    [r["cumulative_seconds"] for r in rows],
+                    rolling_mean([r["val_win_rate"] for r in rows], self.comparison.win_window),
+                )
                 for name, rows in self.learning.items()
             },
-            "Validation win rate against training time",
+            f"Validation win rate against training time (rolling mean over {self.comparison.win_window})",
             "seconds",
             "win rate",
             folder / "win_rate_by_time.png",
@@ -535,6 +560,11 @@ class MethodComparison:
         lines.append(
             f"Every variant trained for up to {self.comparison.iterations} iterations"
             + (f" or {self.comparison.time_budget:.0f} seconds" if self.comparison.time_budget else "")
+            + (
+                f" (those short of the win criterion then continued for up to {self.comparison.extended_iterations} more)"
+                if self.comparison.extended_iterations > 0 and self.comparison.until_win_rate is not None
+                else ""
+            )
             + f", then each champion played {self.comparison.tournament_games} seeded games as the learner against voting opponents."
         )
         lines.append("")
@@ -588,8 +618,10 @@ class MethodComparison:
             )
             lines.append("| --- | --- | --- | --- | --- | --- | --- |")
             for row in table.itertuples():
-                iterations = row.iterations_to_criterion if row.iterations_to_criterion is not None else "-"
-                seconds = f"{row.seconds_to_criterion:.0f}" if row.seconds_to_criterion is not None else "-"
+                # pandas turns a column with a missing value into floats with NaN, so test both None and NaN.
+                reached_it, reached_s = row.iterations_to_criterion, row.seconds_to_criterion
+                iterations = f"{int(reached_it)}" if reached_it is not None and pd.notna(reached_it) else "-"
+                seconds = f"{reached_s:.0f}" if reached_s is not None and pd.notna(reached_s) else "-"
                 lines.append(
                     f"| {row.variant} | {'yes' if row.reached_criterion else 'no'} | {iterations} | {seconds} | "
                     f"{row.iterations} | {row.extended_iterations} | {row.final_val_win_rate:.2f} |"

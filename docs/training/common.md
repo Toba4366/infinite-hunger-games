@@ -241,6 +241,14 @@ The current readings, always with the same four keys:
 
 The `gpu` value is a fixed string. Everything in this project runs in numpy on the CPU.
 
+### `champion_key(stage, val_win_rate, val_score)`
+
+```python
+def champion_key(stage: int, val_win_rate: float, val_score: float) -> tuple[int, float, float]:
+```
+
+The order in which every trainer compares candidate champions: the tuple `(stage, val_win_rate, val_score)`. Python compares tuples element by element, so the curriculum stage decides first, then the validation win rate, then the validation score. A validation score against one opponent is not comparable with one against seven, which is why the stage comes first: a policy from an easier rung can never displace one that played at a harder rung. REINFORCE and PPO, the genetic algorithm and NEAT all pick their champion with this key; imitation has no curriculum and keeps its lowest-validation-loss epoch.
+
 ### `LearnerSpec`
 
 ```python

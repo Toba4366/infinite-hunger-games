@@ -84,6 +84,16 @@ class IterationStats:
         return row
 
 
+def champion_key(stage: int, val_win_rate: float, val_score: float) -> tuple[int, float, float]:
+    """The order champions are compared in: highest curriculum stage first, then validation wins, then score.
+
+    Validation scores from different stages are not comparable (one opponent is easier than seven), so the stage
+    comes first; a policy from an easier rung can never displace one that played at a harder rung.
+    """
+    # Lexicographic tuple: Python compares element by element.
+    return (int(stage), float(val_win_rate), float(val_score))
+
+
 class EventLog:
     """Timestamped one-line messages about what training is doing (the dashboard's event monitor)."""
 

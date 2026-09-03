@@ -100,6 +100,8 @@ Headless: prefix commands with `MPLBACKEND=Agg`.
 python experiments/run_comparison.py --methods imitation,genetic,neat,reinforce,ppo --pairs --curriculum \
     --iterations 150 --until-win 0.5 --extend-iterations 1000 --extend-hours 2 \
     --games 75 --workers 6           # the full experiment: cold and warm, train until it wins, slow starters get more time
+bash experiments/run_full.sh                                            # the same three runs (methods, sizes, initialisers) as one command
+bash experiments/run_sensitivity.sh                                     # cold REINFORCE and PPO over learning rate, entropy bonus, batch size
 python experiments/run_comparison.py --methods imitation,ppo --warm --curriculum --iterations 30
 python experiments/run_comparison.py --methods ppo --sizes 16,64x32,128x64                # network sizes
 python experiments/run_comparison.py --methods ppo --initializers xavier_uniform,he_uniform,zeros
@@ -130,6 +132,30 @@ Each writes `results/<name>_<timestamp>/` containing `config.json`,
 `history.json` (or `results.csv` and `summary.json` for a sweep),
 `champion.json`, and `plots/` with one PNG per chart plus a growing-curve
 GIF. The dashboard's Train and Research tabs write the same folders.
+
+## Claims and evidence
+
+The claims above were tested on 2026-09-03 with `experiments/run_full.sh`: every
+method, cold and warm, trained to the win criterion with the curriculum,
+slow starters extended, then a 75-game tournament. The full write-up with
+the numbers, the ladders each variant climbed and the charts is in
+[docs/results/full_methods/README.md](docs/results/full_methods/README.md).
+In brief:
+
+| Claim | Evidence |
+| --- | --- |
+| Imitation gives the instincts; policy-gradient fine-tuning then beats the teacher | Warm REINFORCE met the criterion in 62 iterations (175 s) and won the tournament (win rate 0.17, survival 216 ticks) against imitation's 0.16 and 174 ticks |
+| Cold starts are slower by orders of magnitude | No cold variant met the criterion in 1,150 iterations; cold REINFORCE's entropy only fell from 2.69 to 2.41 (near uniform) |
+| Warm beats cold for REINFORCE and the GA | 0.17 against 0.00 and 0.03 against 0.00 in the tournament |
+| Warm PPO needs a gentler learning rate | Cold PPO beat warm PPO (0.07 against 0.03); warm PPO's entropy rose from 0.45 to 1.82, so its updates un-sharpened the imitation policy |
+| Evolution is the slowest here | The GA and NEAT never left the first rung; the warm GA reached seven opponents at generation 34 and stalled for 900 more |
+| Simplest to implement | Imitation, 525 lines; NEAT is the largest at 981 |
+| Imitation needs width; PPO fine-tuning prefers a small network | 16 hidden nodes copied the teacher at 72 percent accuracy and never won as imitation, but warm PPO on it won 0.24 of tournament games, the best of any champion; 64x32 gave 0.17 and 128x64 gave 0.13 ([sizes](docs/results/sizes/README.md)) |
+| Xavier uniform is the right default; zeros never learn | Zeros stayed at 11 percent imitation accuracy (the symmetry problem) and won nothing; Xavier's PPO won 0.17 against He uniform's 0.05 ([initializers](docs/results/initializers/README.md)) |
+
+One seed, two validation games per iteration, and champions chosen by
+validation score rather than by curriculum stage: the limitations section
+of the write-up says what that does and does not prove.
 
 ## Python API
 

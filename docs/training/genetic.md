@@ -93,6 +93,8 @@ What happened in one generation. Built by `step_generation` and kept in `trainer
 | `cumulative_seconds` | `float` (default `0.0`) | Seconds since training started |
 | `telemetry` | `dict` (default `{}`, `repr=False`) | Merged `BehaviorTelemetry.summary()` of this generation's evaluation games |
 | `showcase` | `Recording | None` (default `None`, `repr=False`) | A recording of one real evaluation game from this generation, or `None` when `record_showcase` is off |
+| `val_win_rate` | `float` (default `0.0`) | Share of validation games this generation's champion won (game-level) |
+| `stage` | `int` (default `0`) | Curriculum stage the generation was played at (0 without a curriculum). Both new fields sit after `showcase` because `step` builds the stats positionally |
 
 There is no validation win rate on `GenerationStats`. It goes to the shared `IterationStats.val_win_rate` through `_last_val_win_rate` (see `step_generation`).
 
@@ -270,7 +272,7 @@ One full generation:
 2. `_apply_curriculum()`.
 3. Score everyone: `evaluate_against_voting` in `"voting"` mode (which also gives `lengths` and `wins`), else `evaluate`.
 4. `ranking = np.argsort(fitness)[::-1]`, best first. The champion is a copy of `population[ranking[0]]`.
-5. `val_fitness, val_win_rate = self.validate_with_wins(champion)`, and `self._last_val_win_rate = val_win_rate`.
+5. `val_fitness, val_win_rate = self.validate_with_wins(champion)`, and `self._last_val_win_rate = val_win_rate`. The stats then get `val_win_rate` and the curriculum's `stage`, which the `champion` property ranks generations by.
 6. Merge this generation's telemetry.
 7. Build `GenerationStats` and append it to `history`.
 8. `_record_iteration(stats, list(fitness), lengths, wins)`, the shared record.
@@ -344,7 +346,7 @@ def previous_champion(self) -> np.ndarray | None:
 def champion(self) -> np.ndarray | None:
 ```
 
-The champion of the generation with the highest `best_fitness`, or `None` before any generation has run. Chosen by *training* fitness, not validation.
+The champion of the generation that ranks first by `champion_key(stage, val_win_rate, val_fitness)` ([common.md](common.md)): highest curriculum stage, then validation win rate, then validation fitness. `None` before any generation has run. It used to be the generation with the highest training fitness, which could hand the tournament a genome from an easy rung of the curriculum.
 
 #### `champion_brain(chaos=None)`
 

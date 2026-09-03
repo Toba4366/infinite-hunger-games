@@ -201,11 +201,11 @@ One generation, in this order:
 1. Start the clocks.
 2. `_apply_curriculum()`.
 3. `telemetry, showcase = self.evaluate(on_progress)`.
-4. The generation's champion is the fittest genome. If it beats `self.best`, store a copy and log a `"record"` event with its fitness, hidden node count and connection count.
-5. `val_score, val_win_rate = self.validate(champion)`, the champion of this generation, not necessarily `self.best`.
+4. The generation's champion is the fittest genome, and `val_score, val_win_rate = self.validate(champion)` scores it on the fixed seeds.
+5. `key = champion_key(stage, val_win_rate, val_score)` ([common.md](common.md)). If there is no best yet or `key` beats `best_key`, store a copy as `self.best` with the key, and log a `"record"` event with its fitness, hidden node count and connection count. The overall champion is therefore the best genome at the highest curriculum stage reached, by validation wins, not the highest training fitness.
 6. Merge the telemetry with `BehaviorTelemetry.merge`.
 7. `scores` is every genome's fitness; `mean_score` their mean.
-8. `speciate()`, remember `best_species_id` when the champion is the best ever, log an `"evolution"` event (`generation G: S species, best B, mean M`), then `reproduce()`.
+8. `speciate()`, remember `best_species_id` when this generation's champion is the overall champion (`key >= best_key`), log an `"evolution"` event (`generation G: S species, best B, mean M`), then `reproduce()`.
 9. Build the `IterationStats` with `iteration=generation`, the scores, `entropy` and `mean_length` (`mean_survival_ticks`) from the merged telemetry, `win_rate` = the mean of `_last_wins` (game-level, over every evaluation game), `val_score`, `val_win_rate`, timings, the curriculum's stage and opponents (or `num_players - 1`), `extra={"species", "hidden_nodes", "connections", "threshold"}`, `learner=champion.to_dict()`, the telemetry and the showcase. Append it to `history`.
 10. Update `best_mean_score`. Then the curriculum: `judged_win` is `val_win_rate` when `validation_games > 0`, else `stats.win_rate`; call `curriculum.observe(mean_score, judged_win)` and log a `"curriculum"` event on promotion.
 11. `generation += 1` and return the stats.

@@ -161,7 +161,7 @@ class ReinforceTrainer:
 def __init__(self, config: SimulationConfig, rl: RLConfig, scenario: Scenario | None = None, initial_genome: np.ndarray | None = None, curriculum: Curriculum | None = None) -> None:
 ```
 
-Stores `config`, `rl`, `scenario` and `curriculum`; makes `events = EventLog()`, an empty `learning_history` and `best_mean_score = -inf`. Seeds `self.rng` from `rl.seed`. The policy is `NeuralBrain(chaos=1.0, config=config.neural, rng=self.rng).network`, an `MLP` of shape `[50, *hidden_layers, 16]`. If `initial_genome` is given it is loaded with `set_genome`. The value network is `MLP([VECTOR_SIZE, *rl.value_hidden, 1], config.neural.activation, "xavier_uniform", rng=self.rng)` and always starts fresh. Each gets its own `Adam`. Also `history`, `epoch = 0`, `_stop`, `_started`, `best_genome = None` and `best_val_return = -inf`.
+Stores `config`, `rl`, `scenario` and `curriculum`; makes `events = EventLog()`, an empty `learning_history` and `best_mean_score = -inf`. Seeds `self.rng` from `rl.seed`. The policy is `NeuralBrain(chaos=1.0, config=config.neural, rng=self.rng).network`, an `MLP` of shape `[50, *hidden_layers, 16]`. If `initial_genome` is given it is loaded with `set_genome`. The value network is `MLP([VECTOR_SIZE, *rl.value_hidden, 1], config.neural.activation, "xavier_uniform", rng=self.rng)` and always starts fresh. Each gets its own `Adam`. Also `history`, `epoch = 0`, `_stop`, `_started`, `best_genome = None`, `best_val_return = -inf` and `best_key = None` (the champion's `(stage, validation win rate, validation return)` key).
 
 #### `settings` (property)
 
@@ -288,7 +288,7 @@ def step_epoch(self, on_progress: Callable[[int, int], None] | None = None) -> E
 4. `_update(episodes)`.
 5. Training means from `_outcome_means`: `train_return`, `train_survival`, `win_rate`, `kill_rate`.
 6. Validation on seeds `validation_seed + i` with `greedy=True` and the updated policy. Never recorded. `val_return`, `val_survival` and `val_win_rate` come from `_outcome_means` of those episodes, or zeros when `validation_games` is 0.
-7. If `val_return` beats `best_val_return` (or no best yet), store a copy of the policy as `best_genome`.
+7. `key = champion_key(stage, val_win_rate, val_return)` with the curriculum's current stage (0 without one). If there is no best yet or `key` beats `best_key`, store the key, `val_return` and a copy of the policy as `best_genome`. So the champion is the strongest policy at the hardest stage reached, not a high scorer from an easy rung.
 8. Merge the training telemetry, build `EpochStats` (with `showcase = episodes[0].get("recording")`), append, increment `epoch`.
 9. `_record_iteration(scores, entropy, train_survival, win_rate, val_return, seconds, {"policy_loss", "value_loss"}, telemetry, showcase, val_win_rate)` with `scores` = every learner's return in every training episode.
 
@@ -317,7 +317,7 @@ Sets `_stop`; `run()` returns after the current epoch.
 def champion(self) -> np.ndarray | None:
 ```
 
-`best_genome` if one has been stored, otherwise the current policy genome.
+`best_genome` if one has been stored, otherwise the current policy genome. `best_genome` is chosen by `champion_key` (stage first, then validation win rate, then validation return); see [common.md](common.md).
 
 #### `champion_brain(chaos=0.0)`
 

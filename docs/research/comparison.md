@@ -112,6 +112,10 @@ class ComparisonConfig:
 
 With the defaults a variant trains until it has won a majority of its validation games over five iterations, or for 20 iterations, whichever comes first. With `extended_iterations` set, a variant that hits the 20 without meeting the criterion gets a second chance after every other variant has had its first budget: it keeps training, with the same population or weights, until it meets the criterion or runs out of the extension. That answers "how long does a slow starter really need" instead of cutting it off, and its final network still enters the tournament, so the report can say whether the wait was worth it.
 
+### `rolling_mean(values: list[float], window: int) -> list[float]`
+
+Each value averaged with the ones before it, up to `window` values (the first entries average fewer). Used for the two win-rate charts, because raw validation win rates are 0, 0.5 or 1 and unreadable as a line; the window is `ComparisonConfig.win_window`, the same window the criterion uses.
+
 ### `set_overrides(config: SimulationConfig, overrides: dict) -> SimulationConfig`
 
 Deep-copies the config, then for each `"a.b.c": value` walks `getattr` through `a` and `b` and calls `setattr` on the last part. The original is untouched. A key with no dot sets a top-level field, e.g. `{"chaos": 0.0}`.
@@ -176,7 +180,7 @@ The criterion is tested before the deadline, so a variant that meets both in the
 
 #### `_finish_variant(self, variant, trainer, reached, started, subdir) -> None`
 
-Records one variant's results: `criterion[name] = reached`, `train_seconds[name] = time.time() - started`, `learning[name]` (every `IterationStats` as a row) and the champion. If `run_dir` is set, `save_run(trainer, variant.method, variant.name, run_dir / subdir)` writes the variant's own run folder under `runs/` or `runs_first_budget/`.
+Records one variant's results: `criterion[name] = reached`, `train_seconds[name] = time.time() - started`, `_finished_at[name] = time.time()`, `learning[name]` (every `IterationStats` as a row) and the champion. If `run_dir` is set, `save_run(trainer, variant.method, variant.name, run_dir / subdir)` writes the variant's own run folder under `runs/` or `runs_first_budget/`.
 
 #### `train_all(self, on_progress: Callable[[str, int, Any], None] | None = None) -> None`
 
@@ -184,7 +188,7 @@ Two phases.
 
 **Phase one: the first budget.** Every variant in list order (so a warm start can use an earlier champion): build the trainer, note the start time, compute the deadline from `time_budget` (or `None`), and call `_train_steps` with `iterations`. Then `_finish_variant`. If extension is on (`extended_iterations > 0` and `until_win_rate` is not `None`), the variant missed the criterion, and no stop was requested, the results go under `runs_first_budget/` and the trainer is kept in `_pending`; otherwise they go under `runs/`.
 
-**Phase two: the extension.** Again in list order, every pending trainer keeps training from where it stopped, same population or weights. The callback first gets `(name, iterations so far, "extending: the win criterion was not met within the first budget")`. `started` is set to `time.time() - train_seconds[name]`, so the clock continues from the variant's first iteration and `seconds_to_criterion` stays comparable with variants that finished in phase one (idle time waiting for the other variants is not counted). The deadline is `now + extended_time_budget`, or `None`. `_train_steps` runs with `extended_iterations`; `extended[name]` records how many iterations that added; `_finish_variant` writes the final state under `runs/`, replacing the recorded champion, learning rows, criterion and seconds.
+**Phase two: the extension.** Again in list order, every pending trainer keeps training from where it stopped, same population or weights. The callback first gets `(name, iterations so far, "extending: the win criterion was not met within the first budget")`. `started` is set to `time.time() - train_seconds[name]`, so the clock continues from the variant's first iteration and `seconds_to_criterion` stays comparable with variants that finished in phase one (idle time waiting for the other variants is not counted). The trainer's own clock (the `cumulative_seconds` in its records, which the time charts use) also ran during the wait, so its `_started` is moved forward by `time.time() - _finished_at[name]`; every trainer keeps that attribute. The deadline is `now + extended_time_budget`, or `None`. `_train_steps` runs with `extended_iterations`; `extended[name]` records how many iterations that added; `_finish_variant` writes the final state under `runs/`, replacing the recorded champion, learning rows, criterion and seconds.
 
 So `runs/` always holds the final state of every variant, and `runs_first_budget/` the snapshot of the extended ones at the end of phase one. The `_stop` flag is checked before each variant and each step in both phases.
 
@@ -269,12 +273,12 @@ The overlay charts come from `plots.overlay_curves`, the bars from `plots.bars`.
 
 A generated Markdown write-up:
 
-1. `# Method comparison: <name>` and one sentence stating the budget (`iterations`, the time budget if any, and `tournament_games`). The sentence says "up to" the iteration count, because the win criterion can stop a variant early.
+1. `# Method comparison: <name>` and one sentence stating the budget (`iterations`, the time budget if any, the extension if `extended_iterations` is set, and `tournament_games`). The sentence says "up to" the iteration count, because the win criterion can stop a variant early.
 2. If the tournament ran, `## Ranking by tournament score`: a table sorted by `tournament_win_rate` first and `tournament_score` second, both descending, with columns rank, variant, method, tournament score, tournament win rate, survival, iterations, train seconds, lines of code. The heading still says "score"; the sort key is the win rate. Then three bold lines: **Best in the tournament** (top row, with its score and win rate), **Simplest to implement** (the method with the fewest lines), **Fastest to train under this budget** (the variant with the fewest `train_seconds`).
-3. If `until_win_rate` is not `None`, `## Training to the win criterion (...)` with the threshold as a percentage, the window and "at the final curriculum stage" in the heading. When `extended_iterations` is set, a paragraph first explains the two phases and their caps. One row per variant: reached (`yes` or `no`), iterations to criterion, seconds to criterion (a dash when never reached), iterations trained, iterations added by the extension, and the final validation win rate.
+3. If `until_win_rate` is not `None`, `## Training to the win criterion (...)` with the threshold as a percentage, the window and "at the final curriculum stage" in the heading. When `extended_iterations` is set, a paragraph first explains the two phases and their caps. One row per variant: reached (`yes` or `no`), iterations to criterion, seconds to criterion (a dash when never reached; pandas stores the column as floats with NaN once any variant missed, so both `None` and NaN are tested), iterations trained, iterations added by the extension, and the final validation win rate.
 4. If any `_cold` variant has a `_warm` twin and the tournament ran, `## Warm start against cold start`: one row per pair with the method name (the `_cold` suffix stripped), the cold and warm tournament win rates, the cold and warm iterations to criterion, and the cold and warm seconds to criterion (a dash when never reached). Then one sentence naming the variant with the higher tournament win rate in each pair. On a tie the cold variant is named.
 5. `## Why the methods differ`: one bullet per distinct method with its `METHOD_NOTES` line.
-6. `## Charts`: a fixed list of PNG names (`score_by_method`, `score_by_time`, `validation_by_method`, `entropy_by_method`, `length_by_method`, `tournament_*`, `lines_of_code`, `train_seconds`) and a note that each variant's own run folder is under `runs/`. The three win-rate and curriculum charts are written but not named in this list.
+6. `## Charts`: a fixed list of PNG names (`score_by_method`, `score_by_time`, `validation_by_method`, `entropy_by_method`, `length_by_method`, `tournament_*`, `lines_of_code`, `train_seconds`) and a note that each variant's own run folder is under `runs/`. The three win-rate and curriculum charts are written but not named in this list. The two win-rate charts plot `rolling_mean` over `win_window` iterations, with the window in the title.
 
 ## How to use it / experiment
 

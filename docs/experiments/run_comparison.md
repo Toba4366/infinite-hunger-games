@@ -68,6 +68,7 @@ Then the two package imports with `# noqa: E402`, because they must come after t
 | `--warm` | off | `Variant.warm_from` | Warm-start every method except `imitation` and `neat` from the imitation champion; needs `imitation` in `--methods` |
 | `--sizes` | `None` | `neural.hidden_layers` override | Hidden-layer variants, e.g. `16,64x32,128x64` |
 | `--initializers` | `None` | `neural.initializer` override | Initializer variants, e.g. `xavier_uniform,he_uniform,zeros` |
+| `--set NAME=V1,V2,...` | none (repeatable) | `Variant.settings` | Sweep one trainer setting: one variant per value, named `<method>_<name>_<value>`, for every method whose settings dataclass has that field; imitation keeps one plain variant so the others can warm-start from it |
 | `--size` | `120` | `SimulationConfig.width` and `height` | Arena size |
 | `--days` | `24` (`SimulationConfig.max_days`) | `SimulationConfig.max_days` | Day cutoff |
 | `--name` | `comparison` | `ComparisonConfig.name` | Run folder prefix |
@@ -127,7 +128,7 @@ python experiments/run_comparison.py --methods imitation,genetic,reinforce,ppo -
 
 Read the "Warm start against cold start" table in `report.md`.
 
-**Let the cold starts finish.** The full experiment in `results/run_full.sh`: 150 iterations each first, then up to 1000 more iterations or two hours for any variant still short of the criterion.
+**Let the cold starts finish.** The full experiment in `experiments/run_full.sh`: 150 iterations each first, then up to 1000 more iterations or two hours for any variant still short of the criterion.
 
 ```bash
 python experiments/run_comparison.py --methods imitation,genetic,neat,reinforce,ppo --pairs --curriculum \
@@ -149,6 +150,15 @@ python experiments/run_comparison.py --iterations 30 --until-win -1 --workers 4
 ```bash
 python experiments/run_comparison.py --methods imitation,reinforce,ppo --warm --curriculum --iterations 30 --workers 4
 ```
+
+**A settings sweep.** Which learning rate, entropy bonus or batch size a cold start needs. `--set` takes precedence over `--sizes`, `--initializers` and `--pairs`; values are parsed as Python literals (`1e-3` is a float, `16` an int, `(64,32)` a tuple), anything else stays a string.
+
+```bash
+python experiments/run_comparison.py --methods reinforce,ppo --curriculum --iterations 150 \
+  --set learning_rate=1e-3,3e-3,1e-2 --set entropy_bonus=0.01,0.001 --set episodes_per_epoch=4,16 --workers 6
+```
+
+That makes seven variants per method (three learning rates, two entropy bonuses, two batch sizes; each variant changes one field from the defaults). `experiments/run_sensitivity.sh` ([scripts.md](scripts.md)) is exactly this command. `parse_settings` turns the flag values into `(name, value)` pairs; a method whose settings lack the field is skipped for that pair, and a field that no chosen method has stops the script with an error rather than silently producing no variants.
 
 **Network sizes.** Three PPO variants that differ only in hidden layers.
 

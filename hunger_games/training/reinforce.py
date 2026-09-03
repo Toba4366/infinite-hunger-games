@@ -71,6 +71,7 @@ from hunger_games.training.common import (
     IterationStats,
     LearnerSpec,
     build_learner,
+    champion_key,
     learner_ids,
 )
 
@@ -362,10 +363,12 @@ class ReinforceTrainer:
         self._stop = False
         # Training start time.
         self._started: float | None = None
-        # The genome with the best validation return so far.
+        # The genome with the best (stage, validation win rate, validation return) so far.
         self.best_genome: np.ndarray | None = None
-        # Its validation return.
+        # Its validation return (kept for the champion file's fitness field).
         self.best_val_return = -np.inf
+        # Its comparison key.
+        self.best_key: tuple[int, float, float] | None = None
 
     # ------------------------------------------------------------ episodes
 
@@ -642,8 +645,11 @@ class ReinforceTrainer:
         val_return, val_survival, val_win_rate, _ = (
             self._outcome_means(validation) if validation else (0.0, 0.0, 0.0, 0.0)
         )
-        # Track the best policy by validation return.
-        if val_return > self.best_val_return or self.best_genome is None:
+        # Track the best policy by (curriculum stage, validation win rate, validation return), so the champion
+        # is the strongest policy at the hardest stage reached rather than a high scorer from an easy rung.
+        key = champion_key(self.curriculum.stage if self.curriculum is not None else 0, val_win_rate, val_return)
+        if self.best_key is None or key > self.best_key:
+            self.best_key = key
             self.best_val_return = val_return
             self.best_genome = self.policy.genome().copy()
         # Merge the telemetry of the training episodes.

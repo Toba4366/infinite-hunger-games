@@ -26,8 +26,19 @@ the README's claims, and test whether warm starts really end better.
   table. `run_comparison.py --pairs --until-win --window`.
 - NEAT genomes compile to an evaluation plan (about 30 microseconds per
   forward pass, from several milliseconds), making long NEAT runs feasible.
-- `results/run_full.sh`: the full experiment script (methods cold and warm,
-  sizes, initialisers).
+- `experiments/run_full.sh`: the full experiment script (methods cold and warm,
+  sizes, initialisers), and `experiments/run_sensitivity.sh`: the cold-start
+  sweep over learning rate, entropy bonus and episodes per epoch. Both live
+  in `experiments/` because `results/` is ignored by git. The ignore pattern
+  is now anchored (`/results/`) so that `docs/results/` is tracked.
+- `docs/results/`: the report, numbers and charts of the full methods run
+  (2026-09-03), and a "Claims and evidence" section in the README that
+  points every claim at a measured number. Warm REINFORCE met the criterion
+  in 62 iterations and won the tournament; no cold start met it in 1,150.
+  The sizes run (16, 64x32, 128x64): imitation needs width to copy the
+  teacher, PPO fine-tuning did best on the 16-node network (0.24). The
+  initialisers run: zeros never learn (symmetry), Xavier beat He uniform
+  after fine-tuning (0.17 against 0.05).
 - Watching experiments: the Train tab's "Load champion into the learner
   slots and watch" button plays a saved champion against voting opponents,
   and `run_comparison.py --save-replays-every N` keeps replays of training
@@ -38,6 +49,10 @@ the README's claims, and test whether warm starts really end better.
   so it can be promoted like the other methods (it previously stayed on the
   first stage forever under the win-based rule).
 
+- `run_comparison.py --set NAME=V1,V2,...` (repeatable): sweep one trainer
+  setting, one variant per value for every method whose settings have that
+  field, for the cold-start sensitivity question (learning rate, entropy
+  bonus, episodes per epoch).
 - An extension phase in the comparison: `ComparisonConfig.extended_iterations`
   and `extended_time_budget` (`run_comparison.py --extend-iterations`,
   `--extend-hours`). After every variant has had its first budget, those
@@ -50,6 +65,20 @@ the README's claims, and test whether warm starts really end better.
   experiment script extends up to 1000 iterations or 2 hours per variant.
 
 ### Fixed
+- Champions are chosen by curriculum stage first. REINFORCE and PPO kept
+  the policy with the best validation return over the whole run, and the GA
+  and NEAT the genome with the best training fitness, so a variant that
+  climbed the ladder could send an easy-rung policy to the tournament.
+  `champion_key(stage, val_win_rate, val_score)` in `training/common.py` now
+  ranks candidates for all four; `GenerationStats` records `val_win_rate`
+  and `stage`. Tests in `tests/test_champion.py`.
+- The report's criterion table printed `70.0` and `nan` once any variant
+  missed the criterion (pandas float column); it prints integers and dashes.
+- A trainer's own clock kept running while it waited for the extension
+  phase, stretching the time charts; the comparison now moves the trainer's
+  start forward by the wait.
+- The two win-rate charts plot a rolling mean over the criterion window
+  instead of raw 0, 0.5 and 1 values.
 - The win criterion counted the window that earned the final curriculum
   promotion as wins at the final stage, so a warm variant was declared
   "reached" the moment it was promoted to 23 opponents without playing a

@@ -47,7 +47,14 @@ from hunger_games.research.telemetry import BehaviorTelemetry
 from hunger_games.scenario import Scenario
 
 # Shared training pieces.
-from hunger_games.training.common import Curriculum, EventLog, IterationStats, LearnerSpec, learner_ids
+from hunger_games.training.common import (
+    Curriculum,
+    EventLog,
+    IterationStats,
+    LearnerSpec,
+    champion_key,
+    learner_ids,
+)
 
 
 @dataclass
@@ -119,6 +126,10 @@ class GenerationStats:
     telemetry: dict = field(default_factory=dict, repr=False)
     # A recording of one real evaluation game from this generation (the dashboard's training feed).
     showcase: Recording | None = field(default=None, repr=False)
+    # Share of validation games this generation's champion won (game-level).
+    val_win_rate: float = 0.0
+    # Curriculum stage the generation was played at (0 without a curriculum).
+    stage: int = 0
 
     def to_row(self) -> dict:
         """A JSON-friendly dictionary without the big arrays."""
@@ -602,6 +613,9 @@ class GeneticTrainer:
             telemetry,
             self._last_showcase,
         )
+        # The validation wins and the stage, for choosing the overall champion.
+        stats.val_win_rate = val_win_rate
+        stats.stage = self.curriculum.stage if self.curriculum is not None else 0
         # Keep them.
         self.history.append(stats)
         # The unified record.
@@ -707,12 +721,12 @@ class GeneticTrainer:
 
     @property
     def champion(self) -> np.ndarray | None:
-        """The best genome seen in any generation so far."""
+        """The best genome seen so far: highest curriculum stage, then validation wins, then validation fitness."""
         # Nothing evaluated yet.
         if not self.history:
             return None
-        # The generation with the best fitness.
-        best = max(self.history, key=lambda stats: stats.best_fitness)
+        # The generation that ranks first (stage first, so an easy-rung champion never wins the comparison).
+        best = max(self.history, key=lambda stats: champion_key(stats.stage, stats.val_win_rate, stats.val_fitness))
         # Its champion.
         return best.champion
 
