@@ -127,12 +127,12 @@ Sums `len(read_text().splitlines())` over the files a method needs, relative to 
 | Method | Files counted | Lines at the time of writing |
 | --- | --- | --- |
 | imitation | `imitation.py` | 525 |
-| genetic | `genetic.py` | 757 |
-| neat | `neat.py`, `../brain/neat.py` | 492 + 489 = 981 |
-| reinforce | `reinforce.py` | 753 |
-| ppo | `reinforce.py`, `ppo.py` | 753 + 141 = 894 |
+| genetic | `genetic.py` | 783 |
+| neat | `neat.py`, `../brain/neat.py` | 514 + 489 = 1003 |
+| reinforce | `reinforce.py` | 774 |
+| ppo | `reinforce.py`, `ppo.py` | 774 + 141 = 915 |
 
-PPO inherits from REINFORCE, so it counts both files. NEAT needs its own genome module, so it counts that too. The numbers change whenever the files do; the table above is a snapshot.
+PPO inherits from REINFORCE, so it counts both files. NEAT needs its own genome module, so it counts that too. The numbers change whenever the files do; the table above is a snapshot (the 2026-09-03 experiment recorded 525, 759, 981, 753 and 894, before the lesson curriculum and stage-aware champions were added).
 
 ### `MethodComparison`
 

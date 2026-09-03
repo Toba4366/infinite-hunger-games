@@ -69,6 +69,8 @@ Then the two package imports with `# noqa: E402`, because they must come after t
 | `--sizes` | `None` | `neural.hidden_layers` override | Hidden-layer variants, e.g. `16,64x32,128x64` |
 | `--initializers` | `None` | `neural.initializer` override | Initializer variants, e.g. `xavier_uniform,he_uniform,zeros` |
 | `--set NAME=V1,V2,...` | none (repeatable) | `Variant.settings` | Sweep one trainer setting: one variant per value, named `<method>_<name>_<value>`, for every method whose settings dataclass has that field; imitation keeps one plain variant so the others can warm-start from it |
+| `--cold-set [METHOD.]NAME=VALUE` | none (repeatable) | `Variant.settings` of cold variants | Set one trainer setting on every variant without a warm start (imitation excluded); a `method.` prefix limits it to that method |
+| `--warm-set [METHOD.]NAME=VALUE` | none (repeatable) | `Variant.settings` of warm variants | The same for every warm-started variant |
 | `--size` | `120` | `SimulationConfig.width` and `height` | Arena size |
 | `--days` | `24` (`SimulationConfig.max_days`) | `SimulationConfig.max_days` | Day cutoff |
 | `--name` | `comparison` | `ComparisonConfig.name` | Run folder prefix |
@@ -151,14 +153,21 @@ python experiments/run_comparison.py --iterations 30 --until-win -1 --workers 4
 python experiments/run_comparison.py --methods imitation,reinforce,ppo --warm --curriculum --iterations 30 --workers 4
 ```
 
-**A settings sweep.** Which learning rate, entropy bonus or batch size a cold start needs. `--set` takes precedence over `--sizes`, `--initializers` and `--pairs`; values are parsed as Python literals (`1e-3` is a float, `16` an int, `(64,32)` a tuple), anything else stays a string.
+**A settings sweep.** Which learning rate, entropy bonus or batch size a cold start needs. `--set` takes precedence over `--sizes`, `--initializers` and `--pairs`; values are parsed as Python literals (`1e-3` is a float, `16` an int, `False` a boolean), anything else stays a string; commas separate values, so a tuple cannot be given this way (use `--sizes` for layer shapes).
 
 ```bash
 python experiments/run_comparison.py --methods reinforce,ppo --curriculum --iterations 150 \
   --set learning_rate=1e-3,3e-3,1e-2 --set entropy_bonus=0.01,0.001 --set episodes_per_epoch=4,16 --workers 6
 ```
 
-That makes seven variants per method (three learning rates, two entropy bonuses, two batch sizes; each variant changes one field from the defaults). `experiments/run_sensitivity.sh` ([scripts.md](scripts.md)) is exactly this command. `parse_settings` turns the flag values into `(name, value)` pairs; a method whose settings lack the field is skipped for that pair, and a field that no chosen method has stops the script with an error rather than silently producing no variants.
+That makes seven variants per method (three learning rates, two entropy bonuses, two batch sizes; each variant changes one field from the defaults). `experiments/run_sensitivity.sh` ([scripts.md](scripts.md)) is exactly this command. `parse_settings` turns the flag values into `(name, value)` pairs; a method whose settings lack the field is skipped for that pair, and `check_known` stops the script when a field matches no chosen method, or when a `method.` prefix names a method that is not being run, rather than silently doing nothing.
+
+**Different settings for cold and warm starts.** The sensitivity sweep ([../results/sensitivity/README.md](../results/sensitivity/README.md)) showed that a cold start wants more episodes per update and a smaller entropy bonus than a warm start. `apply_side_settings` gives each side its own: `--cold-set` applies to variants without a `warm_from` (imitation is never touched), `--warm-set` to variants with one, and a `method.` prefix narrows a setting to one method. Variant names do not change; the settings are recorded in the run's `config.json`.
+
+```bash
+python experiments/run_comparison.py --methods imitation,reinforce,ppo --pairs --curriculum lessons \
+  --cold-set episodes_per_epoch=16 --cold-set entropy_bonus=0.001 --cold-set reinforce.learning_rate=3e-3
+```
 
 **Network sizes.** Three PPO variants that differ only in hidden layers.
 
@@ -185,7 +194,7 @@ python experiments/run_comparison.py --methods ppo --initializers xavier_uniform
 | Path | Contents |
 | --- | --- |
 | `config.json` | The base config, the comparison settings (including `until_win_rate` and `win_window`), every variant and its settings |
-| `results.csv` | One row per variant: `variant`, `method`, `iterations`, `train_seconds`, `final_mean_score`, `best_val_score`, `reached_criterion`, `iterations_to_criterion`, `seconds_to_criterion`, `final_val_win_rate`, `tournament_score`, `tournament_win_rate`, `tournament_survival`, `tournament_kills`, `lines_of_code` |
+| `results.csv` | One row per variant: `variant`, `method`, `iterations`, `train_seconds`, `final_mean_score`, `best_val_score`, `reached_criterion`, `iterations_to_criterion`, `seconds_to_criterion`, `extended_iterations`, `final_val_win_rate`, `tournament_score`, `tournament_win_rate`, `tournament_survival`, `tournament_kills`, `lines_of_code` |
 | `summary.json` | The table rows, the tournament dictionary, and every learning curve row |
 | `results_table.tex` | The same table for a paper |
 | `report.md` | The generated ranking (by tournament win rate, then score), the best, simplest and fastest, the criterion table, the warm-versus-cold table when there are pairs, the method notes, the chart list |

@@ -209,7 +209,7 @@ def _record_iteration(self, scores: list[float], entropy: float, mean_length: fl
 
 Appends a unified `IterationStats` with `iteration = len(learning_history)`, the scores and their mean and max, `win_rate` and `val_win_rate` as given, `cumulative_seconds` as the previous record's plus `seconds`, the curriculum's `stage` and `opponents` (or `num_players - 1`), `learner = learner_spec().genome`, and the rest as given. Logs a `"rollout"` event (`iteration I: mean score M, length L ticks, win rate W`) and a `"record"` event when the mean beats `best_mean_score`.
 
-Then the curriculum. `judged_win` is `val_win_rate` when `rl.validation_games > 0`, else the training `win_rate`. It calls `curriculum.observe(mean_score, judged_win)` and logs a `"curriculum"` event on promotion. With the default `CurriculumConfig` that means the policy climbs a stage when it has won at least half of its greedy validation games over the last five epochs. Returns the stats. `PPOTrainer` inherits this method unchanged.
+Then the curriculum. `judged_win` is `val_win_rate` when `rl.validation_games > 0`, else the training `win_rate`. It calls `curriculum.observe(mean_score, judged_win, survival)`, where `survival` is the training games' mean ticks over `config.ticks_per_game` (the share of the game the copies stayed alive, which the survival lessons are judged on), and logs a `"curriculum"` event with the lesson's description on promotion. With the default `CurriculumConfig` that means the policy climbs a stage when it has won at least half of its greedy validation games over the last five epochs. Returns the stats. `PPOTrainer` inherits this method unchanged.
 
 #### `step(on_progress=None)`
 

@@ -8,6 +8,13 @@ that way: whenever code, docs or defaults change, add a line under
 
 ## Unreleased
 
+### Added
+- `run_comparison.py --cold-set` and `--warm-set [METHOD.]NAME=VALUE`: give the
+  cold and the warm side of a comparison their own trainer settings, because
+  the sensitivity sweep showed they want opposite ones; a prefix naming a
+  method that is not being run, or a field no method has, is an error.
+  `run_lessons.sh` uses them. Tests in `tests/test_runner_flags.py`.
+
 ### Fixed
 - `pyproject.toml` declared version 0.3.0 while the changelog had shipped
   0.4.0 through 0.7.0; the package metadata now reads 0.7.0, so an install

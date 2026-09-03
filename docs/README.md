@@ -98,6 +98,7 @@ you want to click before you read.
 | [tests/test_champion.md](tests/test_champion.md) | `test_champion.py` | Stage-aware champion selection |
 | [tests/test_analysis_scripts.md](tests/test_analysis_scripts.md) | `test_analysis_scripts.py` | The post-run statistics |
 | [tests/test_lessons.md](tests/test_lessons.md) | `test_lessons.py` | The lesson curriculum |
+| [tests/test_runner_flags.md](tests/test_runner_flags.md) | `test_runner_flags.py` | The runner's setting flags |
 
 ## Results: `output/`
 

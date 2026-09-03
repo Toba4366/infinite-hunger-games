@@ -211,7 +211,7 @@ One generation, in this order:
 7. `scores` is every genome's fitness; `mean_score` their mean.
 8. `speciate()`, remember `best_species_id` when this generation's champion is the overall champion (`key >= best_key`), log an `"evolution"` event (`generation G: S species, best B, mean M`), then `reproduce()`.
 9. Build the `IterationStats` with `iteration=generation`, the scores, `entropy` and `mean_length` (`mean_survival_ticks`) from the merged telemetry, `win_rate` = the mean of `_last_wins` (game-level, over every evaluation game), `val_score`, `val_win_rate`, timings, the curriculum's stage and opponents (or `num_players - 1`), `extra={"species", "hidden_nodes", "connections", "threshold"}`, `learner=champion.to_dict()`, the telemetry and the showcase. Append it to `history`.
-10. Update `best_mean_score`. Then the curriculum: `judged_win` is `val_win_rate` when `validation_games > 0`, else `stats.win_rate`; call `curriculum.observe(mean_score, judged_win)` and log a `"curriculum"` event on promotion.
+10. Update `best_mean_score`. Then the curriculum: `judged_win` is `val_win_rate` when `validation_games > 0`, else `stats.win_rate`; call `curriculum.observe(mean_score, judged_win, survival)` with `survival = stats.mean_length / config.ticks_per_game` and log a `"curriculum"` event on promotion.
 11. `generation += 1` and return the stats.
 
 The population is replaced in step 8, so `scores` and `learner` describe the population that was just scored, and the champion survives as an elite only if its species is large enough.

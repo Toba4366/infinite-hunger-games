@@ -315,7 +315,7 @@ Appends the unified `IterationStats`, logs events, and advances the curriculum:
 - `val_score = stats.val_fitness`; `val_win_rate = getattr(self, "_last_val_win_rate", 0.0)`.
 - The timings, `stage` and `opponents` from the curriculum (or `num_players - 1`), `extra={"worst_fitness": ...}`, `learner = stats.champion`, the telemetry and the showcase.
 
-Then an `"evolution"` event (`generation G: best B, mean M, validation V`), a `"record"` event when `best_fitness` beats the best seen so far (kept in `best_mean_score`), and `curriculum.observe(mean_score)` with a `"curriculum"` event on promotion.
+Then an `"evolution"` event (`generation G: best B, mean M, validation V`), a `"record"` event when `best_fitness` beats the best seen so far (kept in `best_mean_score`), and `curriculum.observe(mean_score, judged_win, survival)` (validation wins when there are validation games, else training wins; `survival` is `mean_length / config.ticks_per_game`) with a `"curriculum"` event on promotion.
 
 **The curriculum call passes the win rate.** `observe` is called with the mean score and `judged_win`, which is `record.val_win_rate` when `validation_games > 0` and `record.win_rate` otherwise, so the genetic learner is promoted only by winning games, like the other trainers.
 
@@ -443,7 +443,7 @@ if __name__ == "__main__":
 - In `"voting"` mode genomes play greedily (chaos 0), so a genome's score on a given seed is deterministic. `rounds_per_generation` sets how many seeds each genome sees.
 - `win_rate` in `"voting"` mode is over every evaluation game of the whole population (96 with the defaults), not the champion's games. It says how often any genome's copies won, which is a population-wide number. `val_win_rate` is the champion's.
 - `"self"` mode validation counts wins per learner row, not per game, so its `val_win_rate` is capped at one over `learners_per_game`. `"voting"` mode counts games.
-- `champion` is picked by training `best_fitness`. The generation with the highest `val_fitness` may be a different one; `max(trainer.history, key=lambda s: s.val_fitness).champion` gives that genome.
+- `champion` is picked by `champion_key` (curriculum stage, then validation win rate, then `val_fitness`), not by training `best_fitness`. The generation with the highest training fitness may be a different one; `max(trainer.history, key=lambda s: s.best_fitness).champion` gives that genome.
 - The attribute that tracks the `"record"` events is called `best_mean_score` but holds the best `best_fitness`, not a mean.
 - In `"self"` mode the telemetry counts every tribute (they are all population members); in `"voting"` mode it counts only the learner slots.
 - `collect_telemetry=False` only affects `"self"` mode. `play_rl_episode` always measures the learners.

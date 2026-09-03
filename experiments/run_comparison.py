@@ -46,6 +46,42 @@ def parse_settings(specs: list[str]) -> list[tuple[str, object]]:
     return pairs
 
 
+def check_known(specs: list[str], methods: list[str]) -> None:
+    """Stop with an error when a setting name matches no chosen method, instead of silently doing nothing."""
+    for name, _ in parse_settings(specs):
+        # An optional "method." prefix narrows the candidates.
+        method, _, field = name.rpartition(".")
+        # A prefixed method must be one of the methods being run, or the setting would apply to nothing.
+        if method and method not in methods:
+            raise SystemExit(f"{name}: {method!r} is not one of the methods being run ({', '.join(methods)})")
+        candidates = [method] if method else methods
+        if not any(m in METHODS and hasattr(METHODS[m][1](), field) for m in candidates):
+            raise SystemExit(f"{name}: none of {', '.join(candidates)} has a setting called {field!r}")
+
+
+def apply_side_settings(variants: list[Variant], cold_specs: list[str], warm_specs: list[str]) -> list[Variant]:
+    """Apply `--cold-set` to variants without a warm start and `--warm-set` to those with one (imitation untouched).
+
+    The sensitivity sweep showed cold starts want different settings (more episodes per update, a smaller entropy
+    bonus) from warm starts, so a cold-against-warm comparison must be allowed to give each side its own.
+    """
+    for variant in variants:
+        # Imitation has no warm or cold side.
+        if variant.method == "imitation":
+            continue
+        specs = warm_specs if variant.warm_from else cold_specs
+        for name, value in parse_settings(specs):
+            # "reinforce.learning_rate" applies to REINFORCE variants only; "learning_rate" to every method that has it.
+            method, _, field = name.rpartition(".")
+            if method and method != variant.method:
+                continue
+            if variant.settings is None:
+                variant.settings = METHODS[variant.method][1]()
+            if hasattr(variant.settings, field):
+                setattr(variant.settings, field, value)
+    return variants
+
+
 def main() -> None:
     """Parse arguments, compare, save."""
     parser = argparse.ArgumentParser(description="Compare training methods")
@@ -110,6 +146,21 @@ def main() -> None:
         help="sweep one trainer setting: one variant per value for every method whose settings have that field "
         "(imitation keeps a single plain variant so the others can warm-start from it); repeatable",
     )
+    parser.add_argument(
+        "--cold-set",
+        action="append",
+        default=[],
+        metavar="[METHOD.]NAME=VALUE",
+        help="set one trainer setting on every cold-started variant (no warm start; imitation excluded), optionally "
+        "for one method only, e.g. --cold-set episodes_per_epoch=16 --cold-set reinforce.learning_rate=3e-3; repeatable",
+    )
+    parser.add_argument(
+        "--warm-set",
+        action="append",
+        default=[],
+        metavar="[METHOD.]NAME=VALUE",
+        help="the same for every warm-started variant; repeatable",
+    )
     parser.add_argument("--size", type=int, default=120, help="arena size")
     parser.add_argument("--days", type=int, default=SimulationConfig.max_days)
     parser.add_argument("--name", default="comparison")
@@ -121,9 +172,9 @@ def main() -> None:
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     variants = []
     # A --set field no method's settings have would otherwise create no variants and fail silently.
-    for name, _ in parse_settings(args.set):
-        if not any(hasattr(METHODS[m][1](), name) for m in methods):
-            raise SystemExit(f"--set {name}: none of {', '.join(methods)} has a setting called {name!r}")
+    check_known(args.set, methods)
+    check_known(args.cold_set, [m for m in methods if m != "imitation"])
+    check_known(args.warm_set, [m for m in methods if m != "imitation"])
     # Imitation variants must come first so the others can warm-start from them.
     ordered = sorted(methods, key=lambda m: m != "imitation")
     for method in ordered:
@@ -176,6 +227,8 @@ def main() -> None:
             variants.append(Variant(f"{method}_warm", method, curriculum=curriculum, warm_from="imitation"))
         else:
             variants.append(Variant(method, method, curriculum=curriculum, warm_from="imitation" if can_warm else None))
+    # Each side of a cold-against-warm comparison may need its own settings.
+    apply_side_settings(variants, args.cold_set, args.warm_set)
     # Run.
     comparison = MethodComparison(
         config,

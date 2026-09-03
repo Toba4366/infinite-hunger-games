@@ -102,7 +102,7 @@ python experiments/run_comparison.py --methods imitation,genetic,neat,reinforce,
     --games 75 --workers 6           # the full experiment: cold and warm, train until it wins, slow starters get more time
 bash experiments/run_full.sh                                            # the same three runs (methods, sizes, initialisers) as one command
 bash experiments/run_sensitivity.sh                                     # cold REINFORCE and PPO over learning rate, entropy bonus, batch size
-bash experiments/run_lessons.sh                                         # every method on the lesson curriculum, trained until it graduates
+bash experiments/run_lessons.sh                                         # every method on the lesson curriculum, trained until it graduates; cold variants on cold-tuned settings
 python experiments/run_comparison.py --methods imitation,ppo --pairs --curriculum lessons --iterations 150 --extend-iterations 3000
 python experiments/analyze_comparison.py results/full_methods_<stamp>       # Wilson intervals, Fisher tests, trend slopes, smoothed charts
 python experiments/render_champions.py results/full_methods_<stamp>         # one tournament-game GIF per champion
