@@ -64,7 +64,7 @@ Then the two package imports with `# noqa: E402`, because they must come after t
 | `--pairs` | off | two `Variant`s per method | Train a cold and a warm-started variant of every reward or evolution method; needs `imitation` in `--methods` |
 | `--workers` | `1` | `ComparisonConfig.workers` | CPU workers for trainers and the tournament |
 | `--seed` | `0` | `ComparisonConfig.seed` | Seed for the config and every trainer |
-| `--curriculum` | off | `Variant.curriculum` | Train `reinforce`, `ppo`, `genetic` and `neat` with the opponent curriculum |
+| `--curriculum [opponents\|lessons]` | off | `Variant.curriculum` | Train `reinforce`, `ppo`, `genetic` and `neat` with a curriculum: the bare flag (or `opponents`) is the 1, 3, 7, 11, 23 ladder; `lessons` is survive, survive the rules, beat 1 to 23, generalise |
 | `--warm` | off | `Variant.warm_from` | Warm-start every method except `imitation` and `neat` from the imitation champion; needs `imitation` in `--methods` |
 | `--sizes` | `None` | `neural.hidden_layers` override | Hidden-layer variants, e.g. `16,64x32,128x64` |
 | `--initializers` | `None` | `neural.initializer` override | Initializer variants, e.g. `xavier_uniform,he_uniform,zeros` |

@@ -195,7 +195,11 @@ def champion_spec(self) -> LearnerSpec:
 def _apply_curriculum(self) -> None:
 ```
 
-With a curriculum, copies the config with `num_players = min(learners_per_game, 24) + curriculum.opponents`. Called at the start of every epoch.
+With a curriculum, sets `self.config = stage_config(base, curriculum.stage_spec, learners_per_game)`: the roster is the learner copies plus the lesson's opponents, and the lesson's rule overrides are applied to the config the curriculum started from (kept as `_stage_base`, so one lesson's rules do not leak into the next). Called at the start of every epoch.
+
+#### `_episode_config(seed)`
+
+The config of one training episode: `episode_config(self.config, curriculum.stage_spec, seed)`, so a lesson with `variants` (the generalisation lesson) plays each episode under one randomly chosen rule set. `_collect` uses it for training episodes and keeps `self.config` for greedy validation games.
 
 #### `_record_iteration(scores, entropy, mean_length, win_rate, val_score, seconds, extra, telemetry, showcase, val_win_rate=0.0)`
 

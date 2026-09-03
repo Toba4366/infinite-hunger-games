@@ -6,6 +6,17 @@ Each entry was written from the working session that produced it; keep it
 that way: whenever code, docs or defaults change, add a line under
 **Unreleased** and move the block to a version heading when it ships.
 
+## Unreleased
+
+### Fixed
+- `pyproject.toml` declared version 0.3.0 while the changelog had shipped
+  0.4.0 through 0.7.0; the package metadata now reads 0.7.0, so an install
+  reports the same version the changelog does.
+- The `docs/README.md` index called the perception vector 45 values. It has
+  been 50 since the field-knowledge senses were added, which is what
+  `perception.VECTOR_SIZE`, `docs/perception.md` and the README's dashboard
+  table already say.
+
 ## 0.7.0 - 2026-09-03 (train until it wins)
 
 Requested: promote the curriculum only when the learner actually wins,
@@ -31,6 +42,11 @@ the README's claims, and test whether warm starts really end better.
   sweep over learning rate, entropy bonus and episodes per epoch. Both live
   in `experiments/` because `results/` is ignored by git. The ignore pattern
   is now anchored (`/results/`) so that `docs/results/` is tracked.
+- `docs/results/full_methods/paper.md`: the experiment written up as a
+  research paper (abstract, background and prior work, methods, results
+  with Wilson intervals, Fisher tests and trend slopes, discussion against
+  the hypotheses and the source videos, limitations, next steps,
+  references), with the champions' tournament games as GIFs.
 - `docs/results/`: the report, numbers and charts of the full methods run
   (2026-09-03), and a "Claims and evidence" section in the README that
   points every claim at a measured number. Warm REINFORCE met the criterion
@@ -38,7 +54,9 @@ the README's claims, and test whether warm starts really end better.
   The sizes run (16, 64x32, 128x64): imitation needs width to copy the
   teacher, PPO fine-tuning did best on the 16-node network (0.24). The
   initialisers run: zeros never learn (symmetry), Xavier beat He uniform
-  after fine-tuning (0.17 against 0.05).
+  after fine-tuning (0.17 against 0.05). The sensitivity sweep: cold starts
+  want 16 episodes per epoch and a smaller entropy bonus; a learning rate of
+  1e-2 sharpens into a poor policy.
 - Watching experiments: the Train tab's "Load champion into the learner
   slots and watch" button plays a saved champion against voting opponents,
   and `run_comparison.py --save-replays-every N` keeps replays of training
@@ -49,6 +67,28 @@ the README's claims, and test whether warm starts really end better.
   so it can be promoted like the other methods (it previously stayed on the
   first stage forever under the win-based rule).
 
+- The lesson curriculum. `Stage` (opponents, rules as config overrides,
+  per-episode variants, a promotion metric and threshold),
+  `CurriculumConfig.stages`, `CurriculumConfig.lessons()` (survive with no
+  opponents and no circle, survive the rules, beat 1, 3, 7, 11 and 23,
+  generalise across layouts, shapes and rules), `stage_config`,
+  `episode_config` and `apply_overrides` in `training/common.py`;
+  `Curriculum.observe` takes the survival share and judges each lesson on
+  its own metric; every trainer rebuilds its config per lesson and per
+  training episode. `run_comparison.py --curriculum lessons`,
+  `Variant(curriculum="lessons")`. Tests in `tests/test_lessons.py`. The
+  research guide records how the curriculum evolved from score-based
+  promotion to wins to lessons. `experiments/run_lessons.sh` runs the next
+  experiment on it: every method to graduation, then sizes for the best.
+- `experiments/analyze_comparison.py`: Wilson intervals for tournament win
+  rates, two-sided Fisher exact tests for warm-against-cold pairs and against
+  imitation, regression slopes of survival, score, entropy and validation
+  wins per variant, smoothed curves and an error-bar tournament chart, all
+  written to `<run>/analysis/` with a `stats.md`. Tests in
+  `tests/test_analysis_scripts.py`.
+- `experiments/render_champions.py`: rebuilds every champion of a finished
+  comparison and writes one tournament-game GIF per champion to
+  `<run>/gifs/` with an index of who won and how long the copies survived.
 - `run_comparison.py --set NAME=V1,V2,...` (repeatable): sweep one trainer
   setting, one variant per value for every method whose settings have that
   field, for the cold-start sensitivity question (learning rate, entropy

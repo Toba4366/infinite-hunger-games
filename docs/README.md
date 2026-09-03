@@ -23,7 +23,7 @@ you want to click before you read.
 | [resources.md](resources.md) | `resources.py` | Supplies, layouts, weapons |
 | [arena.md](arena.md) | `arena.py` | The world and its navigation maps |
 | [actions.md](actions.md) | `actions.py` | The action vocabulary |
-| [perception.md](perception.md) | `perception.py` | What a tribute senses, and the 45-value vector |
+| [perception.md](perception.md) | `perception.py` | What a tribute senses, and the 50-value vector |
 | [brain/init.md](brain/init.md) | `brain/__init__.py` | The brain registry |
 | [brain/base.md](brain/base.md) | `brain/base.py` | The Brain interface and learning hooks |
 | [brain/initializers.md](brain/initializers.md) | `brain/initializers.py` | Weight initializers, activations and their derivatives |
@@ -74,7 +74,9 @@ you want to click before you read.
 | [experiments/run_rl.md](experiments/run_rl.md) | `experiments/run_rl.py` | A policy-gradient training run from the command line |
 | [experiments/run_sweep.md](experiments/run_sweep.md) | `experiments/run_sweep.py` | A parameter sweep from the command line |
 | [experiments/run_comparison.md](experiments/run_comparison.md) | `experiments/run_comparison.py` | Compare methods, sizes or initializers and run the tournament |
-| [experiments/scripts.md](experiments/scripts.md) | `experiments/run_full.sh`, `experiments/run_sensitivity.sh` | The full experiment and the cold-start sensitivity sweep as one command each |
+| [experiments/scripts.md](experiments/scripts.md) | `experiments/run_full.sh`, `experiments/run_sensitivity.sh`, `experiments/run_lessons.sh` | The full experiment, the cold-start sensitivity sweep and the lesson-curriculum experiment as one command each |
+| [experiments/analyze_comparison.md](experiments/analyze_comparison.md) | `experiments/analyze_comparison.py` | Confidence intervals, Fisher tests, learning trends and smoothed charts for a finished comparison |
+| [experiments/render_champions.md](experiments/render_champions.md) | `experiments/render_champions.py` | One tournament-game GIF per champion of a finished comparison |
 
 ## Tests: `tests/`
 
@@ -94,6 +96,8 @@ you want to click before you read.
 | [tests/test_methods.md](tests/test_methods.md) | `test_methods.py` | Shared stats, NEAT, PPO, the curriculum |
 | [tests/test_comparison.md](tests/test_comparison.md) | `test_comparison.py` | The method comparison and tournament |
 | [tests/test_champion.md](tests/test_champion.md) | `test_champion.py` | Stage-aware champion selection |
+| [tests/test_analysis_scripts.md](tests/test_analysis_scripts.md) | `test_analysis_scripts.py` | The post-run statistics |
+| [tests/test_lessons.md](tests/test_lessons.md) | `test_lessons.py` | The lesson curriculum |
 
 ## Results: `output/`
 

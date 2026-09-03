@@ -1,0 +1,11 @@
+comparison,first,second,first_wins,second_wins,games,difference,fisher_p,significant
+warm against cold,genetic_warm,genetic_cold,2,0,75,0.02666666666666667,0.4966442953020134,False
+warm against cold,reinforce_warm,reinforce_cold,13,0,75,0.17333333333333334,0.00013833752494785636,True
+warm against cold,ppo_warm,ppo_cold,2,5,75,-0.039999999999999994,0.4418867986907793,False
+against imitation,genetic_cold,imitation,0,12,75,-0.16,0.00030302505464768536,True
+against imitation,genetic_warm,imitation,2,12,75,-0.13333333333333333,0.009217789436063247,True
+against imitation,neat,imitation,0,12,75,-0.16,0.00030302505464768536,True
+against imitation,reinforce_cold,imitation,0,12,75,-0.16,0.00030302505464768536,True
+against imitation,reinforce_warm,imitation,13,12,75,0.013333333333333336,1.0,False
+against imitation,ppo_cold,imitation,5,12,75,-0.09333333333333334,0.12029604825351341,False
+against imitation,ppo_warm,imitation,2,12,75,-0.13333333333333333,0.009217789436063247,True

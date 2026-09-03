@@ -1,0 +1,447 @@
+{
+  "base_config": {
+    "width": 120,
+    "height": 120,
+    "shape": "open_field",
+    "layout": "ring",
+    "allow_water_podiums": true,
+    "num_players": 24,
+    "brain_name": "voting",
+    "start_thirst_min": 1.0,
+    "start_hunger_min": 1.0,
+    "start_health_min": 1.0,
+    "career_districts": [
+      1,
+      2,
+      4
+    ],
+    "chaos": 0.5,
+    "seed": null,
+    "ticks_per_day": 24,
+    "max_days": 24,
+    "vision_radius": 8,
+    "landmark_radius": 30,
+    "thirst_days": 3.0,
+    "hunger_days": 7.0,
+    "sponsors_enabled": true,
+    "sponsor_gift_chance": 0.5,
+    "gamemaker_enabled": true,
+    "quiet_days_before_intervention": 1.0,
+    "intervention_days": 6.0,
+    "cannon_and_sky": true,
+    "endgame_instinct": false,
+    "noise": {
+      "scale": 40.0,
+      "octaves": 5,
+      "persistence": 0.5,
+      "lacunarity": 2.0
+    },
+    "terrain": {
+      "water_threshold": 0.25,
+      "sand_size": 0.1,
+      "grass_size": 0.5
+    },
+    "neural": {
+      "hidden_layers": [
+        64,
+        32
+      ],
+      "activation": "tanh",
+      "initializer": "xavier_uniform",
+      "init_scale": 0.05,
+      "sparsity": 0.1
+    },
+    "reward": {
+      "survive_tick": 0.01,
+      "win": 5.0,
+      "death": -3.0,
+      "kill": 1.0,
+      "damage_taken": -2.0,
+      "need_gain": 0.5,
+      "approach": 0.0,
+      "placement": 2.0,
+      "discount": 0.98
+    }
+  },
+  "comparison": {
+    "name": "sensitivity",
+    "iterations": 150,
+    "time_budget": null,
+    "until_win_rate": 0.5,
+    "win_window": 5,
+    "extended_iterations": 0,
+    "extended_time_budget": null,
+    "tournament_games": 75,
+    "save_replays_every": 0,
+    "tournament_learners": 6,
+    "workers": 6,
+    "seed": 0,
+    "results_dir": "results"
+  },
+  "variants": [
+    {
+      "name": "reinforce_learning_rate_0.001",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "reinforce_learning_rate_0.003",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.003,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "reinforce_learning_rate_0.01",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.01,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "reinforce_entropy_bonus_0.01",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "reinforce_entropy_bonus_0.001",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.001,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "reinforce_episodes_per_epoch_4",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "reinforce_episodes_per_epoch_16",
+      "method": "reinforce",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 16,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_learning_rate_0.001",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_learning_rate_0.003",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.003,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_learning_rate_0.01",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.01,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_entropy_bonus_0.01",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_entropy_bonus_0.001",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.001,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_episodes_per_epoch_4",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 4,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    },
+    {
+      "name": "ppo_episodes_per_epoch_16",
+      "method": "ppo",
+      "settings": {
+        "epochs": 30,
+        "episodes_per_epoch": 16,
+        "learners_per_game": 6,
+        "learning_rate": 0.001,
+        "value_learning_rate": 0.003,
+        "entropy_bonus": 0.01,
+        "value_hidden": [
+          32
+        ],
+        "validation_games": 2,
+        "validation_seed": 90000,
+        "max_grad_norm": 5.0,
+        "workers": 1,
+        "seed": null,
+        "record_showcase": true,
+        "clip_ratio": 0.2,
+        "update_epochs": 4,
+        "minibatch_size": 256,
+        "gae_lambda": 0.95
+      },
+      "config_overrides": {},
+      "curriculum": true,
+      "warm_from": null
+    }
+  ]
+}

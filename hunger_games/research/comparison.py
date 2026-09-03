@@ -87,7 +87,8 @@ class Variant:
     # Overrides on the simulation config (dotted keys allowed), e.g. {"neural.hidden_layers": (16,)}.
     config_overrides: dict = field(default_factory=dict)
     # Whether to train with the opponent curriculum.
-    curriculum: bool = False
+    # False: none; True or "opponents": the 1, 3, 7, 11, 23 ladder; "lessons": survive, rules, beat N, generalise.
+    curriculum: bool | str = False
     # The name of another variant whose champion seeds this one (e.g. imitation before ppo).
     warm_from: str | None = None
 
@@ -200,7 +201,13 @@ class MethodComparison:
                 setattr(settings, name, value)
         config = set_overrides(self.base_config, variant.config_overrides)
         config.seed = self.comparison.seed
-        curriculum = Curriculum(CurriculumConfig()) if variant.curriculum else None
+        # A mistyped curriculum name must fail here, not silently fall back to the opponent ladder.
+        if isinstance(variant.curriculum, str) and variant.curriculum not in ("opponents", "lessons"):
+            raise ValueError(f"unknown curriculum {variant.curriculum!r}: use False, 'opponents' or 'lessons'")
+        if variant.curriculum == "lessons":
+            curriculum = Curriculum(CurriculumConfig.lessons())
+        else:
+            curriculum = Curriculum(CurriculumConfig()) if variant.curriculum else None
         initial = None
         if variant.warm_from is not None and variant.warm_from in self.champions:
             spec = self.champions[variant.warm_from]

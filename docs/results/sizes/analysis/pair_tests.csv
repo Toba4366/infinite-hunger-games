@@ -1,0 +1,6 @@
+comparison,first,second,first_wins,second_wins,games,difference,fisher_p,significant
+against imitation,imitation_64x32,imitation_16,12,0,75,0.16,0.00030302505464768536,True
+against imitation,imitation_128x64,imitation_16,9,0,75,0.12,0.003028330151681228,True
+against imitation,ppo_16,imitation_16,18,0,75,0.24,2.396310540274274e-06,True
+against imitation,ppo_64x32,imitation_16,13,0,75,0.17333333333333334,0.00013833752494785636,True
+against imitation,ppo_128x64,imitation_16,10,0,75,0.13333333333333333,0.0014175162412124896,True

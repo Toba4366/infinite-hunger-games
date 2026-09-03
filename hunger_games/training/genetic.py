@@ -53,7 +53,9 @@ from hunger_games.training.common import (
     IterationStats,
     LearnerSpec,
     champion_key,
+    episode_config,
     learner_ids,
+    stage_config,
 )
 
 
@@ -465,8 +467,15 @@ class GeneticTrainer:
         # Nothing without a curriculum or in self-play.
         if self.curriculum is None or self.training.opponents != "voting":
             return
-        players = min(self.training.learners_per_game, 24) + self.curriculum.opponents
-        self.config = SimulationConfig(**{**self.config.to_dict_raw(), "num_players": players})
+        # The config the curriculum started from, so one lesson's rules do not leak into the next.
+        if not hasattr(self, "_stage_base"):
+            self._stage_base = self.config
+        self.config = stage_config(self._stage_base, self.curriculum.stage_spec, self.training.learners_per_game)
+
+    def _episode_config(self, seed: int) -> SimulationConfig:
+        """The config for one training episode: the stage config with one of its variants chosen by the seed."""
+        # No curriculum: the config as it is.
+        return episode_config(self.config, self.curriculum.stage_spec if self.curriculum is not None else None, seed)
 
     def evaluate_against_voting(
         self, on_progress: Callable[[int, int], None] | None = None
@@ -482,7 +491,7 @@ class GeneticTrainer:
                 seed = int(self.rng.integers(2**31 - 1))
                 jobs.append(
                     (
-                        self.config,
+                        self._episode_config(seed),
                         self.scenario,
                         LearnerSpec(self._kind(), genome, self.config.neural),
                         learners,
@@ -696,7 +705,8 @@ class GeneticTrainer:
             self.events.add("record", f"new best fitness {stats.best_fitness:.2f}")
         # Promotion is judged on validation wins when there are validation games, else on training-game wins.
         judged_win = record.val_win_rate if self.training.validation_games > 0 else record.win_rate
-        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win):
+        survival = record.mean_length / max(1, self.config.ticks_per_game)
+        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win, survival):
             self.events.add(
                 "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
             )

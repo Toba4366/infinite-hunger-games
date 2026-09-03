@@ -227,7 +227,11 @@ def champion_spec(self) -> LearnerSpec:
 def _apply_curriculum(self) -> None:
 ```
 
-Only in `"voting"` mode with a curriculum: copies the config with `num_players = min(learners_per_game, 24) + curriculum.opponents`. In `"self"` mode a curriculum is ignored, because the population sets the roster.
+Only in `"voting"` mode with a curriculum: sets `self.config = stage_config(base, curriculum.stage_spec, learners_per_game)`, the learner copies plus the lesson's opponents with the lesson's rule overrides applied to the config the curriculum started from (`_stage_base`). In `"self"` mode a curriculum is ignored, because the population sets the roster.
+
+#### `_episode_config(seed)`
+
+`episode_config(self.config, curriculum.stage_spec, seed)`: the evaluation games of a lesson with `variants` each get one randomly chosen rule set; validation games keep `self.config`.
 
 #### `evaluate_against_voting(on_progress=None)`
 

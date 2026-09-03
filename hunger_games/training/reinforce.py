@@ -72,7 +72,9 @@ from hunger_games.training.common import (
     LearnerSpec,
     build_learner,
     champion_key,
+    episode_config,
     learner_ids,
+    stage_config,
 )
 
 
@@ -399,9 +401,15 @@ class ReinforceTrainer:
         if self.curriculum is None:
             return
         # Learners plus opponents.
-        players = min(self.rl.learners_per_game, 24) + self.curriculum.opponents
-        # Apply.
-        self.config = SimulationConfig(**{**self.config.to_dict_raw(), "num_players": players})
+        # The config the curriculum started from, so one lesson's rules do not leak into the next.
+        if not hasattr(self, "_stage_base"):
+            self._stage_base = self.config
+        self.config = stage_config(self._stage_base, self.curriculum.stage_spec, self.rl.learners_per_game)
+
+    def _episode_config(self, seed: int) -> SimulationConfig:
+        """The config for one training episode: the stage config with one of its variants chosen by the seed."""
+        # No curriculum: the config as it is.
+        return episode_config(self.config, self.curriculum.stage_spec if self.curriculum is not None else None, seed)
 
     def _record_iteration(
         self,
@@ -455,10 +463,9 @@ class ReinforceTrainer:
             self.events.add("record", f"new best mean score {mean_score:.2f}")
         # Curriculum (promotion is judged on the validation games when there are any, else on training games).
         judged_win = val_win_rate if self.rl.validation_games > 0 else win_rate
-        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win):
-            self.events.add(
-                "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
-            )
+        survival = mean_length / max(1, self.config.ticks_per_game)
+        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win, survival):
+            self.events.add("curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.describe()}")
         # Done.
         return stats
 
@@ -482,7 +489,15 @@ class ReinforceTrainer:
         learners = self._learner_ids()
         # Jobs (only the first records, when asked).
         jobs = [
-            (self.config, self.scenario, spec, learners, seed, greedy, record_first and index == 0)
+            (
+                self.config if greedy else self._episode_config(seed),
+                self.scenario,
+                spec,
+                learners,
+                seed,
+                greedy,
+                record_first and index == 0,
+            )
             for index, seed in enumerate(seeds)
         ]
         # Results.

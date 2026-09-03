@@ -83,7 +83,7 @@ class Variant:
 | `method` | `str` | required | A key of `METHODS` |
 | `settings` | `Any` | `None` | The method's settings dataclass; `None` means the defaults |
 | `config_overrides` | `dict` | `{}` | Dotted overrides on the simulation config, e.g. `{"neural.hidden_layers": (16,)}` |
-| `curriculum` | `bool` | `False` | Train with the opponent curriculum |
+| `curriculum` | `bool \| str` | `False` | `True` or `"opponents"`: the 1, 3, 7, 11, 23 ladder; `"lessons"`: survive, survive the rules, beat 1 to 23, generalise |
 | `warm_from` | `str \| None` | `None` | Name of an earlier variant whose champion seeds this one |
 
 A name ending in `_cold` with a twin ending in `_warm` makes a pair for the report. Nothing else reads the name.
@@ -162,7 +162,7 @@ Constructs the trainer for one variant.
 1. Looks up the trainer class and default settings in `METHODS`. Uses `variant.settings` if given, else the defaults.
 2. Copies the shared knobs onto the settings: `workers` and `seed` from `ComparisonConfig`, but only if the settings object has that attribute (all five do).
 3. Applies `variant.config_overrides` to a copy of `base_config`, then sets `config.seed = comparison.seed`.
-4. Builds `Curriculum(CurriculumConfig())` if `variant.curriculum` is true, else `None`. Always the default curriculum: promotion on a majority of validation wins, no timeout.
+4. Builds the curriculum: a string other than `"opponents"` or `"lessons"` raises `ValueError` (a typo must not silently become the ladder); `Curriculum(CurriculumConfig.lessons())` when `variant.curriculum == "lessons"`, `Curriculum(CurriculumConfig())` (the opponent ladder, promotion on a majority of validation wins, no timeout) when it is `True` or `"opponents"`, else `None`.
 5. Warm start: if `warm_from` names a variant that has already trained, takes its champion spec. The genome is passed only when the kinds match: a NEAT champion goes to a NEAT trainer, a neural champion goes to a non-NEAT trainer. Otherwise `initial_genome` is `None` and the trainer starts fresh.
 6. Returns `trainer_class(config, settings, initial_genome=initial, curriculum=curriculum)`.
 

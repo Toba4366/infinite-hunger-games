@@ -102,6 +102,10 @@ python experiments/run_comparison.py --methods imitation,genetic,neat,reinforce,
     --games 75 --workers 6           # the full experiment: cold and warm, train until it wins, slow starters get more time
 bash experiments/run_full.sh                                            # the same three runs (methods, sizes, initialisers) as one command
 bash experiments/run_sensitivity.sh                                     # cold REINFORCE and PPO over learning rate, entropy bonus, batch size
+bash experiments/run_lessons.sh                                         # every method on the lesson curriculum, trained until it graduates
+python experiments/run_comparison.py --methods imitation,ppo --pairs --curriculum lessons --iterations 150 --extend-iterations 3000
+python experiments/analyze_comparison.py results/full_methods_<stamp>       # Wilson intervals, Fisher tests, trend slopes, smoothed charts
+python experiments/render_champions.py results/full_methods_<stamp>         # one tournament-game GIF per champion
 python experiments/run_comparison.py --methods imitation,ppo --warm --curriculum --iterations 30
 python experiments/run_comparison.py --methods ppo --sizes 16,64x32,128x64                # network sizes
 python experiments/run_comparison.py --methods ppo --initializers xavier_uniform,he_uniform,zeros
@@ -137,8 +141,11 @@ GIF. The dashboard's Train and Research tabs write the same folders.
 
 The claims above were tested on 2026-09-03 with `experiments/run_full.sh`: every
 method, cold and warm, trained to the win criterion with the curriculum,
-slow starters extended, then a 75-game tournament. The full write-up with
-the numbers, the ladders each variant climbed and the charts is in
+slow starters extended, then a 75-game tournament. The research paper, with
+the statistics, the ladders each variant climbed, the charts and the
+champions' games as GIFs, is
+[docs/results/full_methods/paper.md](docs/results/full_methods/paper.md);
+the run page with the raw tables is
 [docs/results/full_methods/README.md](docs/results/full_methods/README.md).
 In brief:
 
@@ -151,6 +158,7 @@ In brief:
 | Evolution is the slowest here | The GA and NEAT never left the first rung; the warm GA reached seven opponents at generation 34 and stalled for 900 more |
 | Simplest to implement | Imitation, 525 lines; NEAT is the largest at 981 |
 | Imitation needs width; PPO fine-tuning prefers a small network | 16 hidden nodes copied the teacher at 72 percent accuracy and never won as imitation, but warm PPO on it won 0.24 of tournament games, the best of any champion; 64x32 gave 0.17 and 128x64 gave 0.13 ([sizes](docs/results/sizes/README.md)) |
+| Cold starts want a bigger batch and a smaller entropy bonus | 16 episodes per epoch took cold PPO to seven opponents by iteration 72 (the default needed 322); entropy 0.001 gave the best single-change score; learning rate 1e-2 sharpened both methods into poor policies ([sensitivity](docs/results/sensitivity/README.md)) |
 | Xavier uniform is the right default; zeros never learn | Zeros stayed at 11 percent imitation accuracy (the symmetry problem) and won nothing; Xavier's PPO won 0.17 against He uniform's 0.05 ([initializers](docs/results/initializers/README.md)) |
 
 One seed, two validation games per iteration, and champions chosen by

@@ -85,7 +85,13 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
-        "--curriculum", action="store_true", help="train the reward methods with the opponent curriculum"
+        "--curriculum",
+        nargs="?",
+        const="opponents",
+        default=None,
+        choices=["opponents", "lessons"],
+        help="train the reward methods with a curriculum: 'opponents' (1, 3, 7, 11, 23; the default when the flag "
+        "is given bare) or 'lessons' (survive, survive the rules, beat 1 to 23, generalise)",
     )
     parser.add_argument(
         "--warm",
@@ -121,7 +127,8 @@ def main() -> None:
     # Imitation variants must come first so the others can warm-start from them.
     ordered = sorted(methods, key=lambda m: m != "imitation")
     for method in ordered:
-        curriculum = args.curriculum and method in ("reinforce", "ppo", "genetic", "neat")
+        curriculum = args.curriculum if method in ("reinforce", "ppo", "genetic", "neat") else False
+        curriculum = curriculum or False
         # A warm start comes from the imitation variant with the same size or initializer suffix.
         can_warm = args.warm and method not in ("imitation", "neat") and "imitation" in methods
         if args.set:

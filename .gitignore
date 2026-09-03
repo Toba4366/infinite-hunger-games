@@ -21,3 +21,6 @@ venv/
 # Big generated media (the small dataset and charts in output/ are kept)
 output/*.gif
 *.replay
+
+# Local Claude Code harness: rules, hooks, commands and agents for this machine.
+.claude/

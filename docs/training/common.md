@@ -117,6 +117,28 @@ def tail(self, count: int = 20) -> list[str]:
 
 The most recent `count` events. `Session.training_events` calls this with 14 for the dashboard.
 
+### `Stage`
+
+```python
+@dataclass
+class Stage:
+```
+
+One lesson of a curriculum.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | A label for events and charts (`"survive"`, `"beat 3"`, `"generalise"`) |
+| `opponents` | required | Voting opponents in every game of the stage; the learner's copies are added on top |
+| `overrides` | `{}` | Dotted `SimulationConfig` overrides applied to every game of the stage, e.g. `{"gamemaker_enabled": False}` |
+| `variants` | `()` | Override sets one of which is picked at random per training episode (the generalisation lesson) |
+| `metric` | `"win_rate"` | What promotion is judged on: `"win_rate"`, `"survival"` (share of the game the copies stayed alive) or `"score"` |
+| `threshold` | `0.5` | Promote when the last `window` iterations of that metric average at least this |
+
+### `apply_overrides(config, overrides)`, `stage_config(base, stage, learners)`, `episode_config(config, stage, seed)`
+
+`apply_overrides` copies a config with dotted overrides applied through its dictionary form (`to_dict`, set the keys, `from_dict`), so nested settings (`neural.hidden_layers`) and enums given as strings (`layout: "cornucopia"`, `shape: "round"`) both work. `stage_config` is the config every game of a stage is played on: `num_players = min(learners, 24) + stage.opponents`, then the stage's overrides. `episode_config` is the config of one training episode: the stage config with one of the stage's `variants` chosen by `np.random.default_rng(seed)`, so the same seed always gives the same rules; a stage without variants returns the config itself. Validation games never go through `episode_config`.
+
 ### `CurriculumConfig`
 
 ```python
@@ -128,11 +150,16 @@ class CurriculumConfig:
 | --- | --- | --- |
 | `enabled` | `True` | Whether the curriculum is on |
 | `opponents` | `(1, 3, 7, 11, 23)` | Opponents per stage (the learner's own copies are added on top) |
+| `stages` | `None` | Explicit lessons; when given they replace the `opponents` ladder |
 | `promote_on` | `"win_rate"` | What promotion is judged on: `"win_rate"` (the learner must actually win games) or `"score"` |
 | `win_threshold` | `0.5` | With `promote_on="win_rate"`, promote when the last `window` win rates average at least this (a majority of games) |
 | `threshold` | `3.0` | With `promote_on="score"`, promote when the last `window` mean scores average at least this |
 | `window` | `5` | Iterations averaged for the promotion test |
 | `max_iterations_per_stage` | `0` | Promote anyway after this many iterations in a stage; `0` means never |
+
+#### `lessons(win_threshold=0.5, survival_threshold=0.9, window=5)` (classmethod)
+
+The lesson curriculum, eight `Stage`s: `survive` (0 opponents, circle and sponsors off, promoted on a survival share of at least 0.9), `survive the rules` (0 opponents, circle and sponsors on, survival), `beat 1`, `beat 3`, `beat 7`, `beat 11`, `beat 23` (wins), and `generalise` (23 opponents with one of five variants per episode: cornucopia layout, ring layout, round arena, circle off, sponsors off; wins). The reason is in [../research/README.md](../research/README.md): every cold start of the first full experiment died of thirst before it met its single opponent.
 
 Design reasoning: the zombie video's ladder was 1, 2, 4, 8, 16 zombies. This arena has 24 tributes by default, and the learner keeps 6 copies of itself in every game, so the ladder here is 1, 3, 7, 11 and 23 opponents. The last stage is the full default roster of 23 opponents. Judging on wins rather than score means a stage is cleared only when the learner beats that field, not when it collects points while losing. The default of no timeout means a learner that never wins stays on stage 0; that is a result, not a failure of the curriculum.
 
@@ -150,7 +177,11 @@ Tracks the current stage and decides when to promote.
 def __init__(self, config: CurriculumConfig) -> None:
 ```
 
-Starts at `stage = 0` with `iterations_in_stage = 0` and an empty `recent` list. `recent` holds the judged metric of the recent iterations in this stage: win rates with `promote_on="win_rate"`, mean scores with `promote_on="score"`.
+Starts at `stage = 0` with `iterations_in_stage = 0` and an empty `recent` list. `recent` holds the judged metric of the recent iterations in this stage: whatever the current `Stage.metric` names.
+
+#### `stages` (property), `stage_spec` (property), `describe()`
+
+`stages` is the tuple of lessons: `config.stages` when given, else one `Stage("beat N", N)` per entry of `config.opponents`, judged on wins with `win_threshold` (or on score with `threshold` when `promote_on="score"`). `stage_spec` is the current lesson, the last one when the curriculum is off, clamped at the end. `describe()` is `"beat 7 (7 opponents)"` for events.
 
 #### `opponents` (property)
 
@@ -159,7 +190,7 @@ Starts at `stage = 0` with `iterations_in_stage = 0` and an empty `recent` list.
 def opponents(self) -> int:
 ```
 
-Opponents in the current stage. When the curriculum is off, it returns the last entry of `config.opponents` (the hardest stage). Otherwise it returns `config.opponents[min(stage, len(opponents) - 1)]`, so a stage index past the end still reads the last entry.
+Opponents in the current stage: `stage_spec.opponents`. When the curriculum is off that is the last lesson's count (the hardest stage), and a stage index past the end still reads the last lesson.
 
 #### `finished` (property)
 
@@ -168,23 +199,23 @@ Opponents in the current stage. When the curriculum is off, it returns the last 
 def finished(self) -> bool:
 ```
 
-`True` when the curriculum is off or `stage` is the last index. A finished curriculum never promotes again. The method comparison reads this to decide whether a variant is at the final stage before it tests the win criterion.
+`True` when the curriculum is off or `stage` is the last index of `stages`. A finished curriculum never promotes again. The method comparison reads this to decide whether a variant is at the final stage before it tests the win criterion.
 
-#### `observe(mean_score, win_rate=0.0)`
+#### `observe(mean_score, win_rate=0.0, survival=0.0)`
 
 ```python
-def observe(self, mean_score: float, win_rate: float = 0.0) -> bool:
+def observe(self, mean_score: float, win_rate: float = 0.0, survival: float = 0.0) -> bool:
 ```
 
-Records one iteration's mean score and win rate. Returns `True` when the learner is promoted. The rule:
+Records one iteration's mean score, win rate and survival share (ticks survived divided by `ticks_per_game`, 0 to 1). Returns `True` when the learner is promoted. The rule:
 
 1. If `finished`, return `False` without counting anything.
-2. Add one to `iterations_in_stage`. Append the judged metric to `recent` (`win_rate` with `promote_on="win_rate"`, else `mean_score`) and keep only the last `window` entries.
-3. `bar` is `win_threshold` with `promote_on="win_rate"`, else `threshold`. `good_enough` is true when `recent` has at least `window` entries and their mean is at least `bar`.
+2. Add one to `iterations_in_stage`. Append the metric the current lesson names (`win_rate`, `survival` or `mean_score`) to `recent` and keep only the last `window` entries.
+3. `good_enough` is true when `recent` has at least `window` entries and their mean is at least the lesson's `threshold` (for the classic ladder that is `win_threshold`, or `threshold` when judging on score).
 4. `timed_out` is true when `max_iterations_per_stage` is greater than 0 and `iterations_in_stage` has reached it. With the default `0` it is never true.
 5. If either holds, add one to `stage`, reset `iterations_in_stage` to 0 and `recent` to empty, and return `True`.
 
-The metric that is not being judged is ignored. With the default `promote_on="win_rate"`, `mean_score` plays no part in promotion.
+The metrics that are not being judged are ignored. With the default ladder, `mean_score` and `survival` play no part in promotion; in a survival lesson, wins play no part.
 
 Worked example with `opponents=(1, 3, 7)`, `win_threshold=0.5`, `window=2`, `max_iterations_per_stage=4` (the settings `tests/test_methods.py` uses):
 
@@ -201,12 +232,12 @@ Who passes what:
 
 | Trainer | Call after each iteration |
 | --- | --- |
-| `ReinforceTrainer`, `PPOTrainer` | `observe(mean_score, val_win_rate)` when `validation_games > 0`, else `observe(mean_score, win_rate)` |
+| `ReinforceTrainer`, `PPOTrainer` | `observe(mean_score, val_win_rate, survival)` when `validation_games > 0`, else with `win_rate`; `survival` is the training games' mean ticks over `ticks_per_game` |
 | `NeatTrainer` | The same rule with its own `validation_games` |
-| `GeneticTrainer` | `observe(mean_score, val_win_rate)` when `validation_games > 0`, else `observe(mean_score, win_rate)` |
+| `GeneticTrainer` | The same rule with its own `validation_games` |
 | `ImitationTrainer` | Never calls `observe` |
 
-Every caller logs a `"curriculum"` event when `observe` returns `True`. Note that the thresholds are compared directly with the mean of the window; there is no per-stage scaling in the code.
+Every caller logs a `"curriculum"` event with `describe()` when `observe` returns `True`, and rebuilds its config with `stage_config` at the start of the next iteration. Note that the thresholds are compared directly with the mean of the window; there is no per-stage scaling in the code.
 
 ### `SystemMonitor`
 

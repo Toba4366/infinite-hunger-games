@@ -57,7 +57,9 @@ from hunger_games.training.common import (
     IterationStats,
     LearnerSpec,
     champion_key,
+    episode_config,
     learner_ids,
+    stage_config,
 )
 
 # The episode player.
@@ -195,8 +197,15 @@ class NeatTrainer:
         # Nothing without a curriculum.
         if self.curriculum is None:
             return
-        players = min(self.neat.learners_per_game, 24) + self.curriculum.opponents
-        self.config = SimulationConfig(**{**self.config.to_dict_raw(), "num_players": players})
+        # The config the curriculum started from, so one lesson's rules do not leak into the next.
+        if not hasattr(self, "_stage_base"):
+            self._stage_base = self.config
+        self.config = stage_config(self._stage_base, self.curriculum.stage_spec, self.neat.learners_per_game)
+
+    def _episode_config(self, seed: int) -> SimulationConfig:
+        """The config for one training episode: the stage config with one of its variants chosen by the seed."""
+        # No curriculum: the config as it is.
+        return episode_config(self.config, self.curriculum.stage_spec if self.curriculum is not None else None, seed)
 
     # ------------------------------------------------------------ evaluate
 
@@ -221,7 +230,7 @@ class NeatTrainer:
                 seed = int(self.rng.integers(2**31 - 1))
                 jobs.append(
                     (
-                        self.config,
+                        self._episode_config(seed),
                         self.scenario,
                         LearnerSpec("neat", genome.to_dict()),
                         learners,
@@ -433,7 +442,8 @@ class NeatTrainer:
             self.best_mean_score = mean_score
         # Curriculum (judged on validation wins when there are validation games).
         judged_win = val_win_rate if self.neat.validation_games > 0 else stats.win_rate
-        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win):
+        survival = stats.mean_length / max(1, self.config.ticks_per_game)
+        if self.curriculum is not None and self.curriculum.observe(mean_score, judged_win, survival):
             self.events.add(
                 "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
             )

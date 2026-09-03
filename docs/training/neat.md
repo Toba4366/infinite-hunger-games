@@ -129,7 +129,11 @@ def _learner_ids(self) -> list[int]:
 def _apply_curriculum(self) -> None:
 ```
 
-Without a curriculum, nothing. With one, the config is copied with `num_players = min(learners_per_game, 24) + curriculum.opponents`, so the roster is the learner copies plus the stage's opponents.
+Without a curriculum, nothing. With one, `self.config = stage_config(base, curriculum.stage_spec, learners_per_game)`: the learner copies plus the lesson's opponents, with the lesson's rule overrides applied to the config the curriculum started from (`_stage_base`).
+
+#### `_episode_config(seed)`
+
+`episode_config(self.config, curriculum.stage_spec, seed)`: evaluation games of a lesson with `variants` each get one randomly chosen rule set; validation keeps `self.config`.
 
 #### `_play(jobs)`
 

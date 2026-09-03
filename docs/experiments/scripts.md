@@ -36,6 +36,16 @@ Seven variants per method, each changing one field from the defaults (the defaul
 nohup bash experiments/run_sensitivity.sh > results/sensitivity_log.txt 2>&1 &
 ```
 
+## `run_lessons.sh`
+
+The second full experiment, on the lesson curriculum, trained to graduation. Every method, cold and warm pairs, `--curriculum lessons`, 150 iterations first and then up to 3,000 more iterations or four hours for anything short of the criterion at the last lesson; champions are stage-aware. Then imitation and warm REINFORCE (the first experiment's winner) at three network sizes on the same curriculum.
+
+```bash
+nohup bash experiments/run_lessons.sh > results/lessons_log.txt 2>&1 &
+```
+
+Expect it to run overnight: eight variants with up to 3,150 iterations each, then six more.
+
 ## Gotchas
 
 - **Both scripts `cd` to the repository root** (`"$(dirname "$0")/.."`), so they can be started from anywhere, and they use `python3 -u` so the log is unbuffered.

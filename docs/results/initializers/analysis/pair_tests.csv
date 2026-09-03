@@ -1,0 +1,6 @@
+comparison,first,second,first_wins,second_wins,games,difference,fisher_p,significant
+against imitation,imitation_he_uniform,imitation_xavier_uniform,1,12,75,-0.14666666666666667,0.0022792754110456336,True
+against imitation,imitation_zeros,imitation_xavier_uniform,0,12,75,-0.16,0.00030302505464768536,True
+against imitation,ppo_xavier_uniform,imitation_xavier_uniform,13,12,75,0.013333333333333336,1.0,False
+against imitation,ppo_he_uniform,imitation_xavier_uniform,4,12,75,-0.10666666666666666,0.06135868159465148,False
+against imitation,ppo_zeros,imitation_xavier_uniform,0,12,75,-0.16,0.00030302505464768536,True
