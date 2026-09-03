@@ -6,6 +6,9 @@ loot, tributes (circles for female, squares for male, coloured by
 district), the selection ring, parachutes and the game makers' circle.
 """
 
+# Trigonometry for the star.
+import math
+
 # Dear PyGui.
 import dearpygui.dearpygui as dpg
 
@@ -226,6 +229,8 @@ class ArenaCanvas:
         # If watching a loaded replay, the roster comes from the recording.
         if self.session.recording is not None and not roster:
             roster = {e.player_id: e for e in self.session.recording.roster}
+        # Which tributes are driven by a learner brain (they get a star).
+        learners = self.session.learner_ids_on_screen()
         # Draw each.
         for player_id, (x, y) in positions.items():
             # Facts.
@@ -257,6 +262,9 @@ class ArenaCanvas:
                     thickness=1.5,
                     parent=self.tribute_layer,
                 )
+            # A gold star on learners, so you can follow the network being trained.
+            if player_id in learners:
+                self._draw_star(px, py, radius * 1.1)
             # Label.
             if self.show_labels:
                 dpg.draw_text(
@@ -266,6 +274,19 @@ class ArenaCanvas:
                     size=max(10, self.cell * 1.6),
                     parent=self.tribute_layer,
                 )
+
+    def _draw_star(self, px: float, py: float, radius: float) -> None:
+        """A five-pointed gold star centred on a pixel position."""
+        # Ten points alternating outer and inner radius.
+        points = []
+        for i in range(10):
+            r = radius if i % 2 == 0 else radius * 0.45
+            angle = -math.pi / 2 + i * math.pi / 5
+            points.append((px + r * math.cos(angle), py + r * math.sin(angle)))
+        # Draw as a filled polygon.
+        dpg.draw_polygon(
+            points, color=(40, 30, 0, 255), fill=(255, 215, 0, 255), thickness=1.0, parent=self.tribute_layer
+        )
 
     def _draw_overlays(self) -> None:
         """Selection ring, parachutes and the game makers' circle."""

@@ -1,6 +1,6 @@
 # Using the game makers' dashboard
 
-The dashboard is a desktop window for designing an arena, picking the tributes, watching a game play out tick by tick, training brains and watching them train, and measuring what the tributes do. It is built with Dear PyGui. This page is the reference for every control. For a guided first run with pictures taken from the real dashboard, read the [illustrated walkthrough](../tutorial/README.md), which is the written version of the Tutorial tab. The code is explained in [init.md](init.md), [main.md](main.md), [painter.md](painter.md), [session.md](session.md), [canvas.md](canvas.md), [visualizer.md](visualizer.md), [app.md](app.md) and [screenshots.md](screenshots.md).
+The dashboard is a desktop window for designing an arena, picking the tributes, watching a game play out tick by tick, training one brain against the voting strategy and watching it train, and measuring what the tributes do. It is built with Dear PyGui. This page is the reference for every control. For a guided first run with pictures taken from the real dashboard, read the [illustrated walkthrough](../tutorial/README.md), which is the written version of the Tutorial tab. The code is explained in [init.md](init.md), [main.md](main.md), [painter.md](painter.md), [session.md](session.md), [canvas.md](canvas.md), [visualizer.md](visualizer.md), [app.md](app.md) and [screenshots.md](screenshots.md).
 
 ## Launching
 
@@ -37,7 +37,7 @@ Painting, placing loot and dragging only work while no game is loaded. After a g
 
 ## Reading the arena
 
-Female tributes are circles and male tributes are squares, filled with their district's colour and labelled `D4F`, `D4M` and so on (turn labels off on the Map tab). Weapons are red triangles, food a white dot, medicine a magenta plus. A yellow ring marks the selected tribute. While a game plays, a white parachute appears over anyone receiving a sponsor gift, a red X flashes where someone was just eliminated, and a red ring shows the game makers' safe circle when it is closing. While editing, only the stacks you placed by hand are drawn; the layout's own supplies appear once a game starts.
+Female tributes are circles and male tributes are squares, filled with their district's colour and labelled `D4F`, `D4M` and so on (turn labels off on the Map tab). A gold star on a tribute means it is driven by the learner brain: the network being trained, or a champion you handed out. Weapons are red triangles, food a white dot, medicine a magenta plus. A yellow ring marks the selected tribute. While a game plays, a white parachute appears over anyone receiving a sponsor gift, a red X flashes where someone was just eliminated, and a red ring shows the game makers' safe circle when it is closing. While editing, only the stacks you placed by hand are drawn; the layout's own supplies appear once a game starts.
 
 ## Tab by tab
 
@@ -54,11 +54,11 @@ The first tab is a walkthrough in ten folding steps, the same steps as the [illu
 | 4. Place loot | Selects the Place loot tool, opens Loot. Click the arena yourself |
 | 5. Play a game | Selects the Select tool, starts a new game at 8 ticks per second, opens Play |
 | 6. Inspect and watch a network think | Sets the default brain to `neural`, gives it to every tribute (dropping any trained genomes), starts a game at 4 ticks per second, selects the first tribute, opens Brains on the left and Network on the right |
-| 7. Train and watch training | Switches the Train tab to the genetic settings, sets the training feed to `live`, and starts a fixed short run: 24 voting brains for 5 generations with 1 game per genome and 1 validation game. Opens Train |
+| 7. Train and watch training | Switches the Train tab's method to `imitation`, sets the training feed to `live`, and starts a fixed short imitation run: 2 demonstration games, 4 epochs, 1 validation game, 6 learner slots. Opens Train |
 | 8. Research | Opens Research |
 | 9. Save and share | Opens Play, where the replay and GIF buttons are; the other files are on Setup, Map and Train |
 
-Step 7 uses its own fixed numbers and never warm-starts; the Train tab's own fields are left as you set them. The method radio button may keep highlighting the choice you had before, because the step switches the settings shown but not the radio itself.
+Step 7 uses its own fixed numbers, never warm-starts and uses no curriculum; the Train tab's Advanced settings are left as you set them. It does nothing while another run is already going.
 
 ### Setup
 
@@ -84,7 +84,7 @@ Four folding sections and the buttons under them. Changing shape, size, layout o
 | | quiet days before it, days to close | When it starts and how gently it closes |
 | | podiums may stand in water | Allow podiums in the sea, as in the 75th games |
 | Buttons | Regenerate arena, New roster | A fresh Perlin map; new names, scores, brains and podiums |
-| | Save config, Load config | The settings as JSON. Loading refreshes every widget, including the hidden-layer fields, and regenerates the map |
+| | Save config, Load config | The settings as JSON, including the network architecture and the reward function. Loading refreshes every Setup and Brains widget and regenerates the map |
 
 ### Map
 
@@ -123,18 +123,18 @@ The table lists the roster; click a name to select. A `*` after the brain name m
 | name, district, sex | Rename them; 1 Luxury to 12 Mining; F or M |
 | training score | 1 to 12, as the game makers rate tributes. Raises sponsor favour and podium spacing |
 | survival score | 0.05 to 0.95, hunting aptitude against terrain difficulty |
-| brain | voting, random or neural |
+| brain | voting, random or neural. A tribute given a NEAT champion shows `neat` in the table, but picking anything in this combo replaces it |
 | granted weapon | A weapon they start with, by quality (0 = none) |
 | granted food, granted medkits | Items in their pack at the start |
 | sponsor favour bonus | Extra favour, so sponsors send gifts sooner |
 | start thirst, start hunger, start health | Their own starting bars; 0 means use the Setup minimums |
-| Forget trained genome | Drop a champion genome so the brain starts fresh |
+| Forget trained genome | Drop a champion genome so the brain starts fresh (and lose the star) |
 
 ### Brains
 
 | Control | Meaning |
 | --- | --- |
-| default brain | voting (the video's instinct-voting brain), random (a baseline) or neural (the network below, untrained until you train it). Used by New roster and Add tribute |
+| default brain | voting (the video's instinct-voting brain), random (a baseline) or neural (the network below, untrained until you train it). Used by New roster and Add tribute, and by the opponents in training games |
 | Give this brain to every tribute | Set everyone to that brain and drop any genomes |
 | number of hidden layers | 1 to 6. A hidden layer is a row of neurons between the 50 inputs and the 16 outputs. The default is 2. Changing the number adds or removes the fields below at once |
 | nodes in hidden layer 1, 2, ... | One field per layer, 1 to 512 nodes each. The defaults are 64 and 32. New layers start at 16; widths you typed are kept when you change the count |
@@ -143,7 +143,7 @@ The table lists the roster; click a name to select. A `*` after the brain name m
 | init scale, sparsity | Used by the constant, uniform and normal initializers, and by sparse |
 | Apply network settings | Read the fields into the settings and show the shape and parameter count, e.g. `Network: 50 -> 64 -> 32 -> 16, tanh, xavier_uniform, 5872 params` for the defaults |
 
-The width fields change nothing until you press Apply network settings; the Network tab's caption shows the architecture in force. The default of two layers, 64 and 32 wide, was chosen by measurement: after imitation pretraining it copies the voting brain 80 % of the time, where a single layer of 16 manages 64 %. The folding section "Inputs (50) and outputs (16)" lists the perception vector in order: the three bars, survival and training scores, weapon quality and reach, food and medkits carried, in water, hunt difficulty, downhill direction, direction and distance to water, grass and the centre, the loot here and nearby, the nearest threat's direction, distance, level and health, players in sight, the danger zone and hazard, the safe direction, day fraction, alive fraction, what the cannon and sky told them (field known, field strength, strongest remaining, my rank), and which terrain they stand on. The 16 outputs are rest, drink, eat, hunt, pick_up, heal, attack, flee and eight moves. The brain takes the highest score, or a softmax sample when chaos is above 0.
+The width fields change nothing until you press Apply network settings; the Network tab's caption shows the architecture in force. The folding section "Inputs (50) and outputs (16)" lists the perception vector in order and the 16 actions (rest, drink, eat, hunt, pick_up, heal, attack, flee and eight moves). The brain takes the highest score, or a softmax sample when chaos is above 0. The NEAT method ignores this architecture: it grows its own.
 
 ### Play
 
@@ -156,58 +156,79 @@ The width fields change nothing until you press Apply network settings; the Netw
 
 ### Train
 
-Pick `imitation`, `genetic` or `reinforce` at the top; the settings below switch with it. The dashboard starts on `genetic`.
+The Train tab trains **one network**. In every training game that network drives a few roster slots (6 by default), marked with gold stars on the arena, and every other tribute uses the voting brain from the video. The tab is laid out like the training dashboard in the PPO zombie-arena video: pick a method, press Start, and read the panels while it runs.
 
-**Why three methods.** A fresh neural network picks actions almost at random. In this arena that means it does not drink, so it dies of thirst on about day three, long before winning or losing games could teach it anything. Measured with the default network on the ring layout: untrained, 10 of 12 learner deaths were dehydration. Imitation fixes that by copying a brain that already works, and the other two methods then improve on the copy.
+**The five methods.** The combo at the top lists them in the order a learner should try them; the line under the combo is the help text for the chosen one.
 
-| Method | What it does | Works on |
+| Method | Help text | Genome |
 | --- | --- | --- |
-| `imitation` | Behaviour cloning. Plays games with the voting brain as teacher, records every (perception, action) pair, and trains the network to predict the teacher's action. Ordinary supervised learning: cross-entropy loss, Adam, backpropagation. After the same measurement, 2 of 12 learner deaths were dehydration | The neural brain only |
-| `genetic` | Evolves a population of genomes by playing them against each other on the painted map | The neural or the voting brain |
-| `reinforce` | Policy gradient with a value baseline; rewards every action with the Reward function | The neural brain only |
+| `imitation` | Copies the voting brain's decisions (supervised). Start here: it gives the network instincts. | The neural network from the Brains tab |
+| `genetic` | Evolves the weights of a population of networks; each plays as the learner against voting opponents. | The neural network, or the voting brain's 8 genes |
+| `neat` | Evolves weights and the shape of the network, in species (the Monopoly video's method). | A NEAT genome that grows its own hidden nodes |
+| `reinforce` | Policy gradient with a value baseline: every action is scored by the reward function. | The neural network |
+| `ppo` | Clipped policy gradient with several passes per batch (the zombie video's method). The most stable reward method. | The neural network |
 
-**start from the current champion.** The checkbox under the method radio, ticked by default. When Start training is pressed with it ticked, the new run begins from the last run's champion, or, when there is no earlier run, from a neural genome in the roster (for example one loaded with Load champion into all). Genetic runs build their population as that genome plus close relatives of it; reinforce and imitation load it into their network. It only applies to neural genomes: a genetic run with brain to evolve set to `voting` starts fresh and the status line says "Training (genetic)..." without "warm start". Untick it to start from random weights.
+**Why imitation first.** A fresh neural network picks actions almost at random. In this arena that means it does not drink, so it dies of thirst on about day three, long before winning or losing games could teach it anything. Imitation fixes that by copying a brain that already works; the other methods then improve on the copy. The dashboard starts on `imitation` with "start from the current champion" ticked, so the natural order is: imitation, then `ppo` (or `reinforce`, `genetic` or `neat`) from the imitation champion.
 
-**Imitation** controls:
+**Options under the combo.**
 
 | Control | Default | Meaning |
 | --- | --- | --- |
-| teacher brain | `voting` | The brain whose decisions the network copies (the only choice) |
-| demonstration games | 12 | Teacher games to record. Each gives about 24 tributes times hundreds of ticks of (perception, action) pairs; 12 games are about 40,000 decisions. A fifth of them are held out for validation |
-| epochs | 30 | Passes over the recorded decisions |
-| batch size | 256 | Decisions per gradient step |
-| learning rate | 0.001 | The Adam step size |
-| validation games | 1 | Greedy games the student plays each epoch, in 6 roster slots, on a fixed seed. They give survival, win rate, behaviour telemetry and the feed's recording. 0 turns them off |
-| CPU workers | 1 | Processes for the demonstration and validation games |
+| start from the current champion | on | The run begins from the last run's champion, or, with no earlier run, from a learner genome in the roster (for example one loaded with Load champion into all). Genetic and NEAT build their population from it; imitation, reinforce and PPO load it into their network. It only applies when the kinds match: a neural champion seeds the four neural methods, a NEAT champion seeds NEAT, and `genetic` with brain to evolve `voting` always starts fresh. When it applies the status line says "warm start" |
+| curriculum: opponents grow 1, 3, 7, 11, 23 | off | Like the zombie video's one-to-sixteen ladder. The learner faces 1 opponent first (plus its own copies) and is promoted to the next stage when the mean score of its last 5 iterations reaches the promotion threshold (3.0), or after 40 iterations in a stage. The status line says "curriculum" and the event monitor reports each promotion |
+| Training feed | `off` | What the arena shows while training runs, see below |
 
-The teacher demonstrates with chaos 0, so its labels are its favourite action every time. The first epoch is slower than the rest because it records the demonstrations first; the progress bar counts those games.
+**Controls.**
 
-**Genetic** controls: brain to evolve, population, generations, games per genome, elite fraction, mutation rate and scale, crossover rate, validation games (the champion against the default brain on fixed seeds each generation), CPU workers. After imitation, keep the champion box ticked and lower the mutation scale to about 0.02 (the default is 0.1) so the copied instincts are not erased by noise.
+| Button | What it does |
+| --- | --- |
+| Start | Begins a run with the method, the options and the Advanced settings. Disabled while a run is going |
+| Pause / Resume | Holds the run between iterations (the current iteration finishes first). The progress bar says "(paused)" |
+| Stop | Ends the run after the current iteration |
+| Reset | Stops, forgets the trainer and clears every panel. Champions already handed to tributes stay on them |
+| Watch agent | Gives the champion to the starred learner slots, starts a fresh game at 8 ticks per second and opens the Network tab. Nothing happens before the first iteration ("No champion yet: train first") |
 
-**Reinforce** controls: epochs, games per epoch, learners per game (tributes driven by the learning policy; the rest use the default brain as opponents), learning rate, value learning rate, entropy bonus (keeps the policy varied), validation games, CPU workers, and the folding **Reward function**: per tick alive, win, death, kill, per health lost, per need restored (only while the bar was below half), placement (scaled by placing), and discount (how much a reward one tick later is worth). The settings also hold a dense `approach` reward (points per cell moved toward water while thirsty or grass while hungry); it is 0 by default and has no slider, because a warm start from imitation is the preferred way to give a fresh network its instincts.
+Training runs in the background; the window stays usable.
 
-Start training runs in the background; the window stays usable. Stop after this step finishes the current generation or epoch. The progress bar counts games in the current step.
+**The panels, top to bottom, and what to read from them.**
 
-**Training feed.** The radio button under the progress bar decides what the arena shows while training runs.
+| Panel | What it shows |
+| --- | --- |
+| Progress bar | Games done in the current iteration. The overlay reads "iteration N" while running and "N iterations done" after |
+| Summary line | The last iteration: method, count, mean score, validation score, win rate, then up to four method numbers (imitation: train and validation loss and accuracy; reinforce and PPO: policy and value loss; genetic: worst fitness; NEAT: species, hidden nodes, connections, compatibility threshold) |
+| Latest scores (one bar per episode) | The score of every learner episode in the newest iteration. Genetic and NEAT: one bar per genome in the population. Imitation: the validation games. Reinforce and PPO: the collected games. A wide spread means luck still dominates; bars that all rise together mean the policy improved |
+| Event monitor | The last 14 timestamped events: `rollout` (an iteration's numbers), `evolution` (a generation's species and bests), `record` (a new best), `curriculum` (a promotion), `info` (demonstrations collected). The full log goes to `events.txt` in the run folder |
+| Average score | Three lines per iteration: the mean score of the learner's episodes, the validation score (greedy games on fixed seeds, the honest number), and the best episode. Scores are returns under the reward function for every method but imitation's accuracy-based extras; a rising validation line that tracks the mean means real learning |
+| Entropy (lower = more confident) | The policy entropy in nats. It should fall slowly. Falling to 0 means the policy collapsed onto one action; for reinforce and PPO raise the entropy bonus. For genetic and NEAT this is the action entropy measured in that generation's games |
+| Average game length (learner survival) | Mean ticks the learner survived. A fresh network dies of thirst early; after imitation the line jumps |
+| Learning statistics | Two lines: iteration, seed, seconds per iteration (mean of the last 5), max score so far, learning time in seconds; then the curriculum stage and opponent count, the mean score, entropy and mean length of the last iteration |
+| rollout bar | The same fraction as the progress bar, with "rollout done/total games (percent)" |
+| CPU, memory, GPU | psutil readings of the process (zeros without psutil). GPU always reads "not used (numpy on the CPU)" |
+| Learner genes (gold = changed since last step) | The learner after the newest iteration as bars, gold where a value moved since the iteration before. For the voting brain the eight genes are named on the axis; networks show the first 400 weights; NEAT shows its connection weights, all gold after a structural change |
+| Seconds per iteration | One bar per iteration, so you can budget a run |
+
+**Advanced settings.** A closed section at the bottom; only the chosen method's group is shown, plus the reward function (inside the reinforce and PPO group) and the curriculum settings.
+
+| Method | Controls (default) |
+| --- | --- |
+| Imitation | teacher brain (`voting`, the only choice), demonstration games (12; about 40,000 decisions), learn only from the top N placings (0 = all; set it to 3 to learn from winners), epochs (30), batch size (256), learning rate (0.001), validation games (1), CPU workers (1). The first epoch records the demonstrations, so it is slower and its progress bar counts those games |
+| Genetic | brain to evolve (`neural` or `voting`), opponents (`voting`: each genome is the learner against the voting brain, scored by return; `self`: the population plays itself, scored by placement, the original tournament), population (48), generations (20), games per genome (2), elite fraction (0.1), mutation rate (0.1), mutation scale (0.1; about 0.02 after imitation so the copied instincts are not erased), crossover rate (0.5), validation games (2), CPU workers (1). The curriculum applies only with `voting` opponents |
+| NEAT | population (48), generations (30), target species (8; the compatibility threshold adjusts to reach it), add node rate (0.03), add connection rate (0.08), validation games (2), CPU workers (1). NEAT starts from minimal genomes (inputs wired straight to the outputs) unless warm-started from a NEAT champion |
+| Reinforce and PPO | epochs (30), games per epoch (4), learner copies per game (6), learning rate (0.001), entropy bonus (0.01), PPO clip ratio (0.2) and PPO passes per batch (4) (both used by `ppo` only), validation games (2), CPU workers (1) |
+| Reward function | per tick alive (0.01; the zombie video's lesson: reward survival too much and the learner just runs away), win (5), death (-3), kill (1), per health lost (-2), per need restored (0.5, only while the bar was below half), approach water/food (0, a dense shaping reward, off by default because imitation is the preferred way to give instincts), placement (2, scaled by placing), discount (0.98). These edit the config itself and are saved by Save config |
+| Curriculum settings | opponents per stage (`1,3,7,11,23`), promotion threshold (3.0), max iterations per stage (40) |
+
+**Training feed.** The radio button decides what the arena shows while training runs.
 
 | Feed | What the arena shows |
 | --- | --- |
-| `off` | Nothing; training only fills the plots (the default) |
-| `replay` | After every step, a recording of one real game from that step: for genetic the population playing itself, for reinforce a training episode, for imitation the student's greedy validation game, all on the painted map exactly as the trainer saw it. Every trainer records that game by default |
-| `live` | After every step, a fresh game in which the newest champion drives the trainer's learner slots (genetic: a quarter of the roster, spread out; reinforce and imitation: 6 slots, spread out) while the other tributes keep their brains. Because it is a live game, the Network tab shows real activations |
+| `off` | Nothing; training only fills the panels (the default) |
+| `replay` | After every iteration, a recording of one real game from that iteration, on the painted map exactly as the trainer saw it: imitation's greedy validation game, the first evaluation game of a genetic or NEAT generation, the first collected game of a reinforce or PPO epoch. The learner's slots carry stars |
+| `live` | After every iteration, a fresh game in which the newest champion drives the learner slots (starred) while the other tributes keep their brains. Because it is a live game, the Network tab shows real activations |
 
-The next step is shown only when the arena is free: nothing is loaded, or the replay has reached its last frame, or the live game is over and you have watched to its end. Steps that finish while you are still watching are skipped, and the newest one is shown next. The headline under the arena starts with "training feed: replaying a real generation 3 game" or "training feed: epoch 3 champion playing live" while the feed is on. The feed plays at the current ticks per second, so pick Fast or Max if training is quicker than playback. `replay` replaces the roster and the settings with the training game's, so save your scenario first; `live` writes the champion into the learner slots of your roster.
+The next iteration is shown only when the arena is free: nothing is loaded, or the replay has reached its last frame, or the live game is over and you have watched to its end. Iterations that finish while you are still watching are skipped, and the newest one is shown next. The headline under the arena starts with "training feed: replaying a real generation 3 game" (genetic) or "training feed: epoch 3 champion playing live" (every other method) while the feed is on. The feed plays at the current ticks per second, so pick Fast or Max if training is quicker than playback. `replay` replaces the roster and the settings with the training game's, so save your scenario first; `live` writes the champion into the learner slots of your roster.
 
-| Plot | What it shows |
-| --- | --- |
-| Performance | Imitation: training accuracy, validation accuracy (how often the student picks the teacher's action on held-out decisions) and validation win rate per epoch. With the default network validation accuracy reaches about 80 %. Genetic: best fitness, validation fitness and population mean per generation. Fitness is 1.0 for winning, 0.0 for first out, plus small bonuses for kills and days. Reinforce: training return, validation return and win rate per epoch. A rising validation line that tracks the training line means real learning; training rising while validation stays flat means the network is fitting its own games or demonstrations |
-| Stability | Imitation: training loss, validation loss (cross-entropy, lower is better) and validation survival divided by 100, so 3 on the axis is 300 ticks. Validation loss rising while training loss falls means overfitting; stop or add demonstration games. Reinforce: policy loss, value loss and policy entropy. Entropy falling toward 0 means the policy is collapsing onto one action; raise the entropy bonus. Value loss should fall as the baseline learns. Genetic: the action entropy of that generation's games |
-| Time per step | Seconds per generation or epoch, so you can budget a run |
-| Champion genes | The latest step's genome as bars, gold where a gene changed since the step before. The voting brain's eight genes are named on the axis; big networks show the first 400 weights |
-
-The summary line under the progress bar gives the last step's numbers. After an imitation run it ends with a reminder to keep "start from the current champion" ticked and evolve or reinforce from there.
-
-Buttons: Champion to all, Champion to selected, Watch champion (everyone gets the champion brain and a new game starts at normal speed). Save run folder writes `results/<name>_<timestamp>/` with `config.json`, `history.json`, `champion.json` and a `plots/` folder of PNGs plus a growing-curve GIF. Save champion and Load champion into all use a JSON champion file that carries the network architecture; every method writes the same file shape, and a loaded file counts as a champion for the next warm start.
+**Champions and files.** Champion to all and Champion to selected hand the champion out (with the brain kind it was trained as: `neural`, `voting` or `neat`), and the tributes get stars. Save run folder writes `results/<name>_<timestamp>/` with `config.json`, `history.json`, `learning.json` (the unified curves), `events.txt`, `champion.json` and a `plots/` folder of PNGs. Save champion and Load champion into all use a JSON champion file; every method writes the same shape (a neural file carries the architecture, a NEAT file the genome dictionary), and a loaded file counts as a champion for the next warm start when no trainer exists.
 
 ### Research
 
@@ -215,7 +236,7 @@ Buttons: Champion to all, Champion to selected, Watch champion (everyone gets th
 
 **Charts of the games you have watched.** Every finished game watched this session (including back-to-back ones) is measured. Type a folder (default `output/watched`) and press Export behaviour charts to write twelve PNGs: action distribution, actions by thirst, hunger and health, instinct curves, consumption timing, fight or flight, proximity versus tributes remaining, actions by remaining, the position heatmap, armed versus unarmed heatmaps, and deaths by cause. Forget watched games clears the tally.
 
-The last section is a short fixed text answering the questions a reviewer asks: the method (it names the genetic algorithm and REINFORCE; the imitation option is on the Train tab), the reward function, the observation (a 50-value vector, not a grid), and the tooling (Dear PyGui dashboard, matplotlib charts). The full written answers are in the [research guide](../research/README.md).
+The last section, "Answers a reviewer will ask for", is a short fixed text: the method (imitation, genetic algorithm, NEAT, REINFORCE with a value baseline or PPO, chosen on the Train tab, with warm starts between them and an optional opponent curriculum; `experiments/run_comparison.py` trains them all under one budget and runs a 75-game tournament), the reward function (the Reward function section, with the dense approach reward off by default), the observation (a 50-value vector, not a grid), and the tooling (a custom Dear PyGui dashboard, matplotlib charts). The full written answers are in the [research guide](../research/README.md).
 
 ## The transport bar
 
@@ -233,32 +254,49 @@ The headline shows the day, tick, how many are alive and the frame number, and o
 
 ## The right panel
 
-**Inspector.** Click a tribute (or a row in the Tributes tab). Before a game it shows district and industry, sex, scores, brain, the granted items and the podium cell. During a game it shows the thirst, hunger and health bars at the current frame, whether they are alive or when and how they were eliminated, their weapon and reach, food, medkits, kills, sponsor favour and last action. The event log lists the most recent eliminations and parachutes up to the current frame.
+**Inspector.** Click a tribute (or a row in the Tributes tab). Before a game it shows district and industry, sex, scores, brain (with "(trained)" when it carries a genome), the granted items and the podium cell. During a game it shows the thirst, hunger and health bars at the current frame, whether they are alive or when and how they were eliminated, their weapon and reach, food, medkits, kills, sponsor favour and last action. The event log lists the most recent eliminations and parachutes up to the current frame.
 
 **Network.** Select a neural tribute during a live game and its network is drawn as columns of nodes: the 50 named inputs on the left, the hidden layers, and the 16 named outputs with their probabilities on the right. Red nodes are positive activations, blue nodes negative, dark grey idle. Warm edges are positive weights, cool edges negative, and brighter means larger; only the six strongest edges into each node are drawn. The yellow output label is the action taken. Without a live neural tribute the tab shows the bare architecture from the Brains tab. The picture is redrawn every frame, so use Slow-mo or Step to follow one decision at a time.
 
-Above the drawing, the folding section "How the champion network changed over training" holds two plots that grow with every training step, whether or not the tab is open:
+Select a NEAT tribute (a starred tribute after a NEAT run, or one given a NEAT champion) and the same tab draws the NEAT genome as a graph instead: inputs on the left, hidden nodes in columns by their depth, outputs on the right, and every enabled connection as an edge coloured by its sign and brightened by its size. The caption over it counts the inputs, hidden nodes, outputs and connections, so you can watch the network grow between generations.
+
+Above the drawing, the folding section "How the champion network changed over training" holds two plots that grow with every iteration, whether or not the tab is open:
 
 | Plot | What it shows |
 | --- | --- |
-| Genome change per step (L2) and mean \|weight\| | Two lines by step: how far the champion genome moved from the previous step (the length of the difference vector; 0 at step 0), and the mean absolute value of its genes. A change line that settles toward 0 means the champion has stopped moving; a mean that keeps growing means the weights are getting larger |
-| Champion genome by step | A heat map: one row per step, one column per gene (the first 200), red for positive and blue for negative on a scale that is symmetric about zero. Vertical streaks are genes that stayed put; a row that differs from the one above is a step that changed the champion |
+| Genome change per step (L2) and mean \|weight\| | Two lines by iteration: how far the learner moved from the previous iteration (the length of the difference vector; 0 at step 0), and the mean absolute value of its genes. A change line that settles toward 0 means the learner has stopped moving; a mean that keeps growing means the weights are getting larger |
+| Champion genome by step | A heat map: one row per iteration, one column per gene (the first 200), red for positive and blue for negative on a scale that is symmetric about zero. Vertical streaks are genes that stayed put; a row that differs from the one above is an iteration that changed the learner |
 
-For genetic training the rows are each generation's best genome; for reinforce and imitation they are the network after each epoch.
+For genetic and NEAT the rows are each generation's best genome (NEAT: its connection weights, and the plots restart whenever the champion gains a node or connection); for imitation, reinforce and PPO they are the network after each epoch.
 
-**Charts.** Three live charts of every game watched this session, refreshed every 30 frames: the action distribution in percent; the instinct curves (how often the tribute drank, ate or fled at each level of the matching bar, which is how chapter 4's voting rules were tuned); and a heatmap of where tributes spend their time. Games shown by the `replay` feed are not counted; games from the `live` feed are, once they finish.
+**Charts.** Three live charts of every game watched this session, refreshed every 30 frames: the action distribution in percent; the instinct curves (how often the tribute drank, ate or fled at each level of the matching bar, which is how chapter 4's voting rules were tuned); and a heatmap of where tributes spend their time. Games shown by the `replay` feed are not counted; games from the `live` feed and Watch agent are, once they finish.
 
 ## Recipes
 
-### Train a neural brain: imitation first, then evolve or reinforce from it
+### Train a neural brain: imitation first, then PPO from it
 
-This is the recommended way to get a neural tribute that survives.
+This is the recommended way to get a neural tribute that survives and then improves.
 
 1. Brains tab: keep the default network (number of hidden layers 2, nodes 64 and 32, tanh, xavier_uniform) or set your own, then Apply network settings. The summary reads `Network: 50 -> 64 -> 32 -> 16, tanh, xavier_uniform, 5872 params`.
-2. Train tab: pick `imitation`. Leave the defaults (teacher `voting`, 12 demonstration games, 30 epochs) and set CPU workers to 4 if you have the cores. Press Start training. The first epoch records the demonstrations; then the Performance plot shows training and validation accuracy climbing and the Stability plot shows both losses falling. With the default network validation accuracy ends near 80 %. If validation loss turns upward while training loss keeps falling, press Stop after this step.
-3. Press Watch champion. The student now walks to water and drinks; untrained networks mostly died of thirst (10 of 12 learner deaths in the measurement above, 2 of 12 after imitation).
-4. Keep "start from the current champion" ticked. Pick `genetic`, set brain to evolve `neural` and mutation scale to about 0.02, then Start training. The status line reads "Training (genetic, warm start)..." and the population is the imitation champion plus close relatives, so the validation fitness starts high instead of near zero. Or pick `reinforce` instead: the policy starts from the imitation champion and the reward can now shape it (for example a bigger kill reward) without the network first having to discover drinking on its own.
+2. Train tab: the method is already `imitation`. Open Advanced settings, leave the defaults (12 demonstration games, 30 epochs) and set CPU workers to 4 if you have the cores. Press Start. The event monitor reports the demonstrations collected, then one `rollout` line per epoch with the accuracy and loss; the summary line shows train and validation accuracy climbing. If validation loss turns upward while training loss keeps falling, press Stop.
+3. Press Watch agent. The starred tributes now walk to water and drink. Click one and read the Network tab.
+4. Keep "start from the current champion" ticked. Pick `ppo`, tick the curriculum, and press Start. The status line reads "Training (ppo, warm start, curriculum)...". The learner faces 1 opponent first; the event monitor prints "promoted to stage 1: 3 opponents" when its recent mean score clears 3.0, and so on up to 23. Read the Average score plot (validation is the honest line), the Entropy plot (falling slowly, not to 0) and the Average game length.
 5. Save champion, or Save run folder for the curves. A saved champion loaded later with Load champion into all is picked up by the next warm start.
+
+`reinforce` works the same way with one pass per batch and no clipping; it is noisier. `genetic` from the imitation champion needs mutation scale lowered to about 0.02. `neat` cannot start from a neural champion; see the NEAT recipe.
+
+### Evolve a NEAT brain and watch it grow
+
+1. Train tab: pick `neat`. Untick "start from the current champion" (a neural champion cannot seed NEAT; the box is ignored anyway, but unticking avoids confusion), tick the curriculum, set the training feed to `live`, Play tab: Fast 40/s. Press Start.
+2. The event monitor prints "new species N founded", "generation N: S species, best B, mean M", "new champion: fitness F, H hidden nodes, C connections" and, over time, "stagnant species removed". The summary line's extras give the species count, hidden nodes and connections.
+3. When the live feed shows a game, click a starred tribute and open the Network tab. The graph starts as 50 inputs wired to 16 outputs and gains hidden nodes as generations pass. The Learner genes bars turn all gold whenever the champion's shape changes.
+4. Save champion writes a file with `brain_name: neat`; Load champion into all later gives it to everyone and a NEAT run with the champion box ticked continues from it.
+
+### Compare genetic against the voting brain
+
+1. Train tab: `genetic`, Advanced settings: brain to evolve `voting`, opponents `self`, population 24, generations 10, games per genome 1. Untick the champion box. Training feed `replay`. Start.
+2. The Learner genes plot names the eight voting genes on its axis and turns gold where a generation changed them. As soon as generation 0 finishes, the arena replays one of its real games and the headline reads "training feed: replaying a real generation 0 game".
+3. Champion to all gives every tribute the evolved voting genes; New game and Play to watch them.
 
 ### Paint an island and save it
 
@@ -278,26 +316,19 @@ This is the recommended way to get a neural tribute that survives.
 
 Setup tab: Random above 0.5 starts everyone somewhere between half and full; drag min thirst, min hunger and min health separately for finer control; Everyone starts full resets. For one tribute only, use start thirst, start hunger and start health on the Tributes tab.
 
-### Two hidden layers with He and relu, GA training from scratch, watch the champion, save the run
-
-1. Brains tab: number of hidden layers 2, nodes in hidden layer 1 `32`, nodes in hidden layer 2 `16`, activation `relu`, initializer `he_normal`, Apply network settings. The summary reads `Network: 50 -> 32 -> 16 -> 16, relu, he_normal, 2432 params`.
-2. Train tab: untick "start from the current champion" (this recipe starts from random weights), `genetic`, brain to evolve `neural`, generations 20, CPU workers 4, Start training. The progress bar counts games; the Performance plot grows one point per generation and the gene bars turn gold where the champion changed.
-3. When it finishes (or after Stop after this step), press Watch champion. Click a tribute and open the Network tab to watch its hidden layers.
-4. Type a name in the field next to Save run folder and press it; the status line names the folder under `results/`. Save champion keeps just the genome.
-
 ### Watch training as it happens
 
 1. Map tab: Save scenario first if you edited the roster, because the replay feed replaces it.
-2. Train tab: `genetic`, brain to evolve `voting`, population 24, generations 10, games per genome 1. Training feed `replay`. Play tab: Fast 40/s. Start training.
-3. As soon as generation 0 finishes, the arena replays one of its real games and the headline reads "training feed: replaying a real generation 0 game". When it reaches its last frame the newest finished generation replaces it.
-4. Switch the feed to `live`. When the current replay ends, the newest champion is written into a quarter of the roster's slots and a fresh game starts. Click one of those tributes (the roster marks them with `*`) and open the Network tab. With a neural brain to evolve, the node graph now shows the champion thinking.
-5. Open "How the champion network changed over training" on the Network tab to see how far each generation moved the champion and which genes changed.
+2. Train tab: any method, training feed `replay`. Play tab: Fast 40/s. Start.
+3. After each iteration the arena replays one real training game; the starred tributes are the learner's slots. When it reaches its last frame the newest finished iteration replaces it.
+4. Switch the feed to `live`. When the current replay ends, the newest champion is written into the learner slots and a fresh game starts. Click a starred tribute and open the Network tab to watch it think.
+5. Open "How the champion network changed over training" on the Network tab to see how far each iteration moved the learner and which genes changed.
 
-### Train with reinforce and read the curves
+### Pause, inspect, resume
 
-1. Run the imitation recipe above first, or untick "start from the current champion" to start from random weights (expect the first epochs to be spent dying of thirst).
-2. Brains tab: default brain `voting` (the opponents). Train tab: `reinforce`, epochs 30, games per epoch 4, learners per game 6, CPU workers 4. Open Reward function if you want a different objective (for example a bigger kill reward and a smaller death penalty for aggressive tributes). Start training.
-3. Performance: training return should rise; validation return (greedy policy on fixed seeds) is the honest number. Stability: policy loss is noisy by nature, value loss should fall, entropy should fall slowly and not hit zero. If it collapses, raise the entropy bonus. Watch champion loads the best-validated policy.
+1. Start any run with the feed `off`. When the Average score plot has a few points, press Pause. The progress bar says "(paused)" after the current iteration finishes.
+2. Press Watch agent to play the champion so far, or Champion to selected to give it to one tribute and play a normal game against the rest.
+3. Press Resume. The run continues from where it stopped, with the same history and plots. Stop ends it; Reset clears the panels for a fresh run.
 
 ### Run a chaos sweep and export charts
 
@@ -324,8 +355,8 @@ Setup tab: Random above 0.5 starts everyone somewhere between half and full; dra
 | `scenario.json` | Map | The painted terrain, the hand-placed loot and the roster with podiums, genomes and granted items |
 | `game.replay` | Play | Every tick of a game, as a pickle |
 | `game.gif` | Play | An animation of the recording, one frame per `GIF ticks per frame` ticks |
-| `champion.json` | Train | The champion genome with its brain name and architecture. The reinforce version adds the value network; the imitation version adds the method and the teacher name |
-| `results/<name>_<timestamp>/` | Train | `config.json`, `history.json`, `champion.json`, `plots/` |
+| `champion.json` | Train | The champion genome with its brain name. Neural champions carry the architecture; reinforce and PPO add the value network; imitation adds the teacher; NEAT stores the genome as a dictionary with `brain_name: neat` |
+| `results/<name>_<timestamp>/` | Train | `config.json`, `history.json`, `learning.json`, `events.txt`, `champion.json`, `plots/` |
 | `results/<parameter>_<timestamp>/` | Research | `config.json`, `results.csv`, `summary.json`, `plots/`, plus one `batches/<value>/` folder per value |
 | `output/watched/*.png` | Research | The twelve behaviour charts of the games watched this session |
 | `docs/tutorial/images/*.png` | none | The tutorial's pictures, written by `python -m hunger_games.ui.screenshots` (see [screenshots.md](screenshots.md)) |
@@ -339,13 +370,17 @@ Default names are offered by the file dialogs; the extension is added if you lea
 - Export GIF finishes the current game first, then writes the file, and the window is busy until it is done. A loaded replay is exported as it is.
 - Replay files are Python pickles. Only open `.replay` files you made yourself, because loading a pickle can run code.
 - Training and sweeps with more than one CPU worker use separate processes. This works from the dashboard on macOS, Windows and Linux; the dashboard's entry point is guarded so the workers do not open extra windows.
-- Trainers and sweeps use the painted map but not the hand-placed loot or the edited roster.
-- Load replay and the `replay` training feed do not refresh the Setup widgets, although the session adopts the recording's settings. Load config does refresh them.
+- Trainers and sweeps use the painted map but not the hand-placed loot or the edited roster. Opponents in training games are always the voting brain, whatever the Brains tab's default brain says, except for genetic with opponents `self`.
+- Pause and Stop act between iterations. One iteration is all of its games plus the update, so with many games per iteration and one worker the button seems slow.
+- Reset clears the Train tab but not the Network tab's evolution plots; they refresh when the next run adds an iteration.
+- Load replay and the `replay` training feed do not refresh the Setup widgets, although the session adopts the recording's settings. Load config does refresh them, but not the reward sliders.
 - The `replay` feed replaces the roster with the training game's tributes and the `live` feed writes the champion into some of yours. Save a scenario before turning the feed on if you want your roster back.
-- "start from the current champion" is ticked by default, so a second run of any method continues from the first run's champion unless you untick it. A genetic run of the voting brain ignores it.
-- Changing the network on the Brains tab between runs makes the old champion the wrong size for a warm start. Untick the box, or load a champion file that matches, before pressing Start training.
-- The hidden-layer width fields do nothing until Apply network settings is pressed.
-- The imitation settings have no field for the teacher's chaos, the validation split or the number of student slots; they stay at 0, one fifth and 6.
-- The Reward function has no slider for the dense approach reward; it stays off unless you edit a config file.
-- The Tutorial tab's step 7 starts its own fixed genetic run and switches the settings shown, but the method radio button keeps its old highlight.
+- With a curriculum, training games have fewer tributes than your roster (the learner copies plus that stage's opponents). The `replay` feed shows those smaller games; Watch agent and the `live` feed use your full roster.
+- "start from the current champion" is ticked by default, so a second run of any method continues from the first run's champion unless you untick it. A genetic run of the voting brain ignores it, NEAT ignores a neural champion, and the neural methods ignore a NEAT champion. After Load champion into all, the file is only used when no run has happened yet or after Reset.
+- Changing the network on the Brains tab between runs makes the old champion the wrong size for a warm start. Untick the box, press Reset, or load a champion file that matches before pressing Start.
+- The hidden-layer width fields do nothing until Apply network settings is pressed. NEAT ignores the Brains tab's architecture.
+- The Tributes tab's brain combo has no `neat` entry; a NEAT tribute keeps its brain only until you pick something in that combo.
+- The imitation settings have no field for the teacher's chaos, the validation split or the number of student slots; they stay at 0, one fifth and 6. The curriculum window (5 iterations) has no field either.
+- The reinforce and PPO settings have no fields for the value learning rate, the value network's width, gradient clipping, PPO's minibatch size or GAE lambda; they stay at 0.003, 32, 5.0, 256 and 0.95.
+- The headline calls an iteration a "generation" only for the genetic method; NEAT iterations are labelled "epoch" there.
 - Editing a `.py` file while the dashboard is open changes nothing on screen. Restart the dashboard to pick up source changes.

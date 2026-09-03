@@ -18,7 +18,7 @@ from pathlib import Path
 
 # Run folders and plots.
 from hunger_games.research.experiments import make_run_dir
-from hunger_games.research.plots import training_run_plots
+from hunger_games.research.plots import learning_curve_plots, training_run_plots
 
 
 def save_run(trainer, method: str, name: str, results_dir: str | Path = "results") -> Path:
@@ -38,12 +38,17 @@ def save_run(trainer, method: str, name: str, results_dir: str | Path = "results
     # History.
     rows = trainer.history_rows()
     (folder / "history.json").write_text(json.dumps(rows, indent=2, default=str))
+    # The unified learning history every method shares, and the event log.
+    learning = [stats.to_row() for stats in getattr(trainer, "learning_history", [])]
+    (folder / "learning.json").write_text(json.dumps(learning, indent=2, default=str))
+    (folder / "events.txt").write_text("\n".join(trainer.events.events) if hasattr(trainer, "events") else "")
     # Champion (every trainer writes the same file shape).
     if trainer.champion is not None:
         trainer.save_champion(folder / "champion.json")
     # Telemetry per step.
     summaries = [stats.telemetry for stats in trainer.history if stats.telemetry]
-    # Plots.
+    # Plots: the method's own, plus the shared learning curves.
     training_run_plots(rows, summaries, folder / "plots", method)
+    learning_curve_plots(learning, folder / "plots")
     # Done.
     return folder

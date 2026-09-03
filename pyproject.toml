@@ -10,6 +10,7 @@ dependencies = [
     "pillow>=9",
     "dearpygui>=1.11",
     "pyobjc-framework-Quartz>=9; sys_platform == 'darwin'",
+    "psutil>=5",
 ]
 
 [tool.ruff]

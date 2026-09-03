@@ -1,12 +1,12 @@
 # `session.py`
 
 **Source:** [hunger_games/ui/session.py](../../hunger_games/ui/session.py)
-**Depends on:** `json`, `threading`, `pathlib.Path`, `numpy`; project modules [../arena.md](../arena.md) (`Arena`), [../brain/neural.md](../brain/neural.md) (`MENU_NAMES`, `NeuralBrain`), [../config.md](../config.md) (`SimulationConfig`), [../districts.md](../districts.md) (`SEXES`, `default_tribute_name`), [../game.md](../game.md) (`Game`), [../recorder.md](../recorder.md) (`Frame`, `Recorder`, `Recording`), [../renderer.md](../renderer.md) (`export_recording_gif`), [../research/experiments.md](../research/experiments.md) (`Sweep`, `SweepConfig`), [../research/plots.md](../research/plots.md) (`behaviour_plots`), [../research/telemetry.md](../research/telemetry.md) (`BehaviorTelemetry`), [../resources.md](../resources.md) (`CornucopiaLayout`, `ResourceKind`, `RingLayout`), [../scenario.md](../scenario.md) (`LootSpec`, `Scenario`, `TributeSpec`), [../terrain.md](../terrain.md) (`TerrainType`), [../training/init.md](../training/init.md) (`GeneticTrainer`, `ImitationConfig`, `ImitationTrainer`, `ReinforceTrainer`, `RLConfig`, `TrainingConfig`, `save_run`), [painter.md](painter.md) (`MapPainter`)
-**Used by:** [app.md](app.md) (every widget callback), [canvas.md](canvas.md) (reads `painter`, `positions()`, `current_frame`, `tributes`, `selected_id`, `recording`, `scenario.loot`), [screenshots.md](screenshots.md) (paints the demo stroke and waits for training), `tests/test_ui_session.py`, `tests/test_feed.py`
+**Depends on:** `json`, `threading`, `time`, `pathlib.Path`, `numpy`; project modules [../arena.md](../arena.md) (`Arena`), [../brain/neural.md](../brain/neural.md) (`MENU_NAMES`, `MENU_SIZE`, `NeuralBrain`), [hunger_games/brain/neat.py](../../hunger_games/brain/neat.py) (`NeatBrain`, imported inside `network_snapshot`), [../config.md](../config.md) (`SimulationConfig`), [../districts.md](../districts.md) (`SEXES`, `default_tribute_name`), [../game.md](../game.md) (`Game`), [../recorder.md](../recorder.md) (`Frame`, `Recorder`, `Recording`), [../renderer.md](../renderer.md) (`export_recording_gif`), [../research/experiments.md](../research/experiments.md) (`Sweep`, `SweepConfig`), [../research/plots.md](../research/plots.md) (`behaviour_plots`), [../research/telemetry.md](../research/telemetry.md) (`BehaviorTelemetry`), [../resources.md](../resources.md) (`CornucopiaLayout`, `ResourceKind`, `RingLayout`), [../scenario.md](../scenario.md) (`LootSpec`, `Scenario`, `TributeSpec`), [../terrain.md](../terrain.md) (`TerrainType`), [../training/init.md](../training/init.md) (`Curriculum`, `CurriculumConfig`, `GeneticTrainer`, `ImitationTrainer`, `NeatTrainer`, `PPOTrainer`, `ReinforceTrainer`, `SystemMonitor`, `save_run`), [painter.md](painter.md) (`MapPainter`)
+**Used by:** [app.md](app.md) (every widget callback and every per-frame refresh), [canvas.md](canvas.md) (reads `painter`, `positions()`, `current_frame`, `tributes`, `selected_id`, `recording`, `scenario.loot`, `learner_ids_on_screen()`), [screenshots.md](screenshots.md) (paints the demo stroke and waits for training), `tests/test_ui_session.py`, `tests/test_feed.py`
 
 ## Purpose
 
-`Session` is everything the dashboard is doing, with no GUI code in it. It owns the config, the painted map, the roster, the hand-placed loot, the current game and its recording, the playback clock, the selected tribute, the behaviour telemetry of watched games, the trainer (genetic, reinforce or imitation), the training feed that shows training as it happens, and the parameter sweep. Every button in [app.md](app.md) calls one method here; every frame the panels are redrawn from this object. Because there is no Dear PyGui in it, the whole workflow can be run and tested from a script.
+`Session` is everything the dashboard is doing, with no GUI code in it. It owns the config, the painted map, the roster, the hand-placed loot, the current game and its recording, the playback clock, the selected tribute, the behaviour telemetry of watched games, the trainer (imitation, genetic, NEAT, reinforce or PPO), the training loop with its pause flag, the training feed that shows training as it happens, a system monitor, and the parameter sweep. Every button in [app.md](app.md) calls one method here; every frame the panels are redrawn from this object. Because there is no Dear PyGui in it, the whole workflow can be run and tested from a script.
 
 ## Concepts you need
 
@@ -14,12 +14,15 @@
 - **Recording and playhead.** A game is not played directly; a `Recorder` steps it and keeps every tick as a `Frame`. `playhead` is the frame on screen. Playing at the newest frame simulates a new tick; playing behind it just moves the playhead. See [../recorder.md](../recorder.md).
 - **Ticks per second and the accumulator.** The UI calls `update(seconds)` every frame. Fractional ticks are carried in `_accumulator` so slow speeds like 0.5 ticks per second work.
 - **Telemetry.** A `BehaviorTelemetry` hooks into each game and tallies what tributes chose against how thirsty, hungry, hurt and threatened they were. Its `summary()` is a plain dictionary that can be merged across games and drawn by [../research/plots.md](../research/plots.md).
-- **Threads.** Training and sweeps run in a `threading.Thread` marked `daemon=True`, so closing the window ends them. The GUI polls `training_progress`, `sweep_progress`, `status` and the trainer's `history` each frame. Trainers with more than one worker also start worker processes.
-- **Three trainers, one interface.** `GeneticTrainer`, `ReinforceTrainer` and `ImitationTrainer` all offer `run(on_progress=...)`, `stop()`, `history`, `history_rows()`, `champion`, `save_champion(path)`, `_learner_ids()` and a `settings` dataclass. The session only ever calls these, so most methods here do not care which trainer is running. The three differences it does care about are the x axis name (`generation` for genetic, `epoch` for the others), where the per-step genome lives (`stats.champion` for genetic, `stats.genome` for the others) and the brain kind handed out (`training.brain_name` for genetic, always `neural` for the others).
-- **Genomes.** Every trainer produces a champion as a flat numpy vector. A `TributeSpec.genome` stores it as a list, and the game rebuilds the brain from it. The genetic trainer's champion is the best genome ever scored; the reinforce trainer's is the policy with the best validation return; the imitation trainer's is the student with the lowest validation loss.
-- **Warm starts.** A trainer can begin from an existing genome instead of a random one (`initial_genome`). The genetic trainer builds its population as that genome plus close relatives of it (noise with a quarter of the mutation scale); the reinforce and imitation trainers load it into their network. `warm_start_genome()` finds one; `start_training(..., warm_start=True)` passes it on. The intended order is imitation first, then genetic or reinforce from the imitation champion.
-- **Showcase recordings and the training feed.** Every trainer keeps a `showcase` on each step's stats object: a full `Recording` of one real game from that step, made when `record_showcase` is on, which it is by default in `TrainingConfig`, `RLConfig` and `ImitationConfig`. For genetic it is the first evaluation job's game, for reinforce the first training episode, for imitation the first greedy validation game (none when `validation_games` is 0). The training feed replays those recordings, or lets the newest champion play live, one step at a time, without the GUI knowing anything about trainers.
-- **Learner slots.** A trainer does not drive every tribute. `trainer._learner_ids()` names the roster slots the champion plays in: genetic, a quarter of the roster, spread out; reinforce and imitation, `learners_per_game` slots (6 by default), spread out. The rest use the config's default brain. The feed's `live` mode gives the champion to those same slots.
+- **One learner, five methods.** Every trainer trains one learner network that plays a few roster slots against voting opponents. The five trainers (`ImitationTrainer`, `GeneticTrainer`, `NeatTrainer`, `ReinforceTrainer`, `PPOTrainer`) share one interface: a constructor `(config, settings, scenario=, initial_genome=, curriculum=)`, `step(on_progress)` for one iteration, `stop()`, a `_stop` flag, `history` (method-specific stats), `learning_history` (a list of `IterationStats`, the same shape for every method), `events` (an `EventLog`), `settings`, `champion`, `save_champion(path)` and `_learner_ids()`. The session only calls these, so most methods here do not care which trainer is running.
+- **The loop lives here.** Trainers also have `run()`, but the session does not use it. `start_training` writes its own loop in the thread body: while the iteration count is below the target and `_stop` is clear, either sleep (paused) or call `trainer.step(progress)`. That is what makes Pause possible between iterations.
+- **`IterationStats`.** Each iteration records `iteration`, `scores` (one per learner episode), `mean_score`, `best_score`, `entropy`, `mean_length`, `win_rate`, `val_score`, `seconds`, `cumulative_seconds`, `stage`, `opponents`, `extra` (method-specific numbers), `learner` (the network after the iteration), `telemetry` and `showcase` (a recording of one real episode). `to_row()` drops the big fields and flattens `extra` into `extra_*` keys. See [../training/init.md](../training/init.md).
+- **Genomes: arrays and dictionaries.** Neural learners (imitation, genetic on `neural`, reinforce, PPO) have a flat numpy vector as their genome. The genetic trainer on `voting` has an eight-gene vector. A NEAT learner's genome is a dictionary (nodes and connections with innovation numbers), and its "weights" are the fourth field of each connection entry, `c[3]`. Everywhere the session needs one flat vector it checks `isinstance(genome, dict)` and, for NEAT, takes the connection weights. A `TributeSpec.genome` stores a list for arrays and the dictionary itself for NEAT.
+- **Warm starts.** A trainer can begin from an existing genome (`initial_genome`). The genetic trainer builds its population as that genome plus close relatives; NEAT builds clones of the genome and mutates all but one; the reinforce, PPO and imitation trainers load it into their network. `warm_start_genome()` finds one; `start_training(..., warm_start=True)` passes it on when its kind matches the method. The intended order is imitation first, then PPO, reinforce, genetic or NEAT from the imitation champion.
+- **Curriculum.** A `CurriculumConfig` names the opponents per stage (`(1, 3, 7, 11, 23)` by default), a promotion `threshold` on the mean score of the last `window` iterations, and `max_iterations_per_stage`. The session wraps it in a `Curriculum` only when `enabled` is true, and the trainer resizes its roster each iteration to `min(learners_per_game, 24) + opponents`. The genetic trainer applies it only in `voting` opponent mode.
+- **Showcase recordings and the training feed.** Each step's stats object may carry a `showcase`, a full `Recording` of one real game from that step, made when `record_showcase` is on (the default in every settings dataclass). The training feed replays those recordings, or lets the newest champion play live, one step at a time.
+- **Learner slots and stars.** `trainer._learner_ids()` names the roster slots the learner plays in: `learners_per_game` slots (6 by default for every method) spread evenly across the roster. The feed's `live` mode and Watch agent give the champion to those slots. The canvas draws a gold star on every tribute `learner_ids_on_screen()` reports.
+- **Threads.** Training and sweeps run in a `threading.Thread` marked `daemon=True`, so closing the window ends them. The GUI polls `training_progress`, `sweep_progress`, `status`, the trainer's histories and events each frame. Trainers with more than one worker also start worker processes.
 
 ## Walkthrough
 
@@ -31,7 +34,7 @@
 
 `def __init__(self, config: SimulationConfig | None = None) -> None`
 
-Takes a config or builds the default `SimulationConfig()`. Creates the `MapPainter` at the config's size and a `Scenario(title="Dashboard scenario")`. Initial state: `game = recorder = recording = None`, `playhead = 0`, `playing = False`, `ticks_per_second = 8.0`, `_accumulator = 0.0`, `selected_id = None`, `trainer = None`, `training_method = "genetic"`, `telemetry = None`, `watched_summaries = []`, `_summary_stored = False`, `sweep = None`, `_sweep_thread = None`, `sweep_progress = (0, 0)`, `feed_mode = "off"`, `_feed_steps_seen = 0`, `feed_label = ""`, `_training_thread = None`, `training_progress = (0, 0)`, `status = "Ready"`. Then it calls `generate_arena()` and `generate_roster()`, so a fresh session already has a Perlin map and 24 tributes on podiums. The `trainer` attribute is annotated `GeneticTrainer | ReinforceTrainer | None` but also holds an `ImitationTrainer`.
+Takes a config or builds the default `SimulationConfig()`. Creates the `MapPainter` at the config's size and a `Scenario(title="Dashboard scenario")`. Initial state: `game = recorder = recording = None`, `playhead = 0`, `playing = False`, `ticks_per_second = 8.0`, `_accumulator = 0.0`, `selected_id = None`, `trainer = None`, `training_method = "genetic"`, `telemetry = None`, `watched_summaries = []`, `_summary_stored = False`, `sweep = None`, `_sweep_thread = None`, `sweep_progress = (0, 0)`, `feed_mode = "off"`, `_paused = False`, `_max_iterations = 0`, `system = SystemMonitor()`, `_feed_steps_seen = 0`, `feed_label = ""`, `_training_thread = None`, `training_progress = (0, 0)`, `status = "Ready"`. Then it calls `generate_arena()` and `generate_roster()`, so a fresh session already has a Perlin map and 24 tributes on podiums. The `trainer` attribute is annotated `GeneticTrainer | ReinforceTrainer | None` but holds any of the five trainers.
 
 #### `Session.generate_arena`
 
@@ -43,55 +46,31 @@ Resizes the painter if its size differs from `config.width` and `config.height`,
 
 `def apply_preset(self, name: str) -> None`
 
-Loads one of `MapPainter.PRESETS` into the painter at its current size. Status: "Loaded preset '<name>'".
+`painter.apply_preset(name, config)`; status "Loaded preset '<name>'".
 
-#### `Session.paint`
+#### `Session.paint`, `Session.finish_painting`
 
-`def paint(self, x: int, y: int, terrain: TerrainType, radius: int) -> None`
+`def paint(self, x: int, y: int, terrain: TerrainType, radius: int) -> None`, `def finish_painting(self) -> None`
 
-One brush dab, only if the cell is on the grid. Heights are not recomputed here.
-
-#### `Session.finish_painting`
-
-`def finish_painting(self) -> None`
-
-Calls `painter.finish()` to recompute heights after a stroke. The dashboard calls it on mouse release.
+Paint with the brush when the cell is on the grid; recompute heights after a stroke.
 
 #### `Session.generate_roster`
 
 `def generate_roster(self) -> None`
 
-Builds a throwaway `Game` on the painted terrain so it rolls names, scores, brains and podiums, then turns each player into a `TributeSpec` with `podium=(x, y)`. Clears the selection. Status: "Generated a new roster".
+Builds a throwaway `Game` on the painted terrain so it rolls names, scores, brains and podiums, then turns each player into a `TributeSpec`. Clears the selection. Status: "Generated a new roster".
 
-#### `Session.tributes`
+#### `Session.tributes`, `Session.tribute`
 
-`@property def tributes(self) -> list[TributeSpec]`
+`@property def tributes(self) -> list[TributeSpec]`, `def tribute(self, player_id: int) -> TributeSpec | None`
 
-`scenario.tributes` or an empty list.
+The editable roster (always a list) and one entry by id.
 
-#### `Session.tribute`
+#### `Session.add_tribute`, `Session.remove_tribute`, `Session.move_tribute`
 
-`def tribute(self, player_id: int) -> TributeSpec | None`
+`def add_tribute(self) -> TributeSpec`, `def remove_tribute(self, player_id: int) -> None`, `def move_tribute(self, player_id: int, x: int, y: int) -> None`
 
-One roster entry by id.
-
-#### `Session.add_tribute`
-
-`def add_tribute(self) -> TributeSpec`
-
-Appends a tribute with the next id, district `(id // 2) % 12 + 1`, sex alternating from `SEXES`, the default name for that district and sex, training score 6, survival 0.5, the config's default brain, and a podium at the map centre. Sets `config.num_players` to the roster size.
-
-#### `Session.remove_tribute`
-
-`def remove_tribute(self, player_id: int) -> None`
-
-Removes them, keeps `config.num_players` at least 2, and deselects if they were selected.
-
-#### `Session.move_tribute`
-
-`def move_tribute(self, player_id: int, x: int, y: int) -> None`
-
-Sets the podium to `(x, y)` if the tribute exists, the cell is on the grid and it is not void.
+Append a middling tribute (score 6, survival 0.5, the config's brain) at the map centre with the next id, cycling districts and sexes; remove one and keep `num_players` at least 2; put a podium at a walkable cell.
 
 #### `Session.PODIUM_PRESETS`
 
@@ -99,108 +78,51 @@ Sets the podium to `(x, y)` if the tribute exists, the cell is on the grid and i
 PODIUM_PRESETS = ("edge ring", "around cornucopia", "random", "two sides")
 ```
 
-The names accepted by `arrange_podiums` and shown in the Tributes tab's combo.
+#### `Session._arena_for_podiums`, `Session.arrange_podiums`, `Session.reposition_off_void`
 
-#### `Session._arena_for_podiums`
+`def _arena_for_podiums(self) -> Arena`, `def arrange_podiums(self, preset: str) -> None`, `def reposition_off_void(self) -> None`
 
-`def _arena_for_podiums(self) -> Arena`
-
-A throwaway `Arena(config, rng(0), terrain=painter.terrain)` used for snapping and layout podiums on the painted map.
-
-#### `Session.arrange_podiums`
-
-`def arrange_podiums(self, preset: str) -> None`
-
-Places every podium by a preset, then spreads the strongest tributes apart. Positions per preset:
-
-| Preset | Positions |
-| --- | --- |
-| `edge ring` | `RingLayout().spawn_positions(arena, count)`: along the outer edge |
-| `around cornucopia` | `CornucopiaLayout().spawn_positions(arena, count)`: a tight circle round the middle |
-| `random` | Random cells (unseeded), each snapped with `arena.snap_to_podium` |
-| `two sides` | Even indices at `x = 3`, odd at `x = width - 4`, `y` spread from 3 to `height - 3`, snapped |
-
-Any other name raises `KeyError`. Then the roster is ranked by training score; the top third (at least one) is placed at evenly spaced slots and the rest fill the gaps in order. Slot `i` gets position `i`. Status: "Podiums arranged: <preset>". Does nothing for an empty roster.
-
-#### `Session.reposition_off_void`
-
-`def reposition_off_void(self) -> None`
-
-For every tribute whose podium is `None` or not `arena.is_walkable`, snaps it to the nearest podium cell (from the centre if there was no podium). Called after painting, carving, stamping, presets and shape changes.
+A throwaway arena on the painted map; positions by preset with the strongest third of the roster spread apart (`KeyError` for an unknown preset); nudge every podium onto a walkable cell.
 
 #### `Session.apply_config_change`
 
 `def apply_config_change(self, what: str) -> None`
 
-Reacts to a setting change so the arena on screen matches:
+`size` or `shape`: regenerate and re-place. `layout`: arrange podiums (`edge ring` for `ring`, else `around cornucopia`). `players`: regenerate the roster.
 
-| `what` | Effect |
-| --- | --- |
-| `"size"` or `"shape"` | `generate_arena()` then `reposition_off_void()` |
-| `"layout"` | `arrange_podiums("edge ring")` if the layout is `ring`, else `"around cornucopia"` |
-| `"players"` | `generate_roster()` |
+#### `Session.tribute_at`, `Session.positions`
 
-Other strings do nothing. The dashboard's `_setter(..., react=...)` passes these.
+`def tribute_at(self, x: int, y: int, radius: float = 1.5) -> int | None`, `def positions(self) -> dict[int, tuple[int, int]]`
 
-#### `Session.tribute_at`
+The nearest tribute within `radius` cells (Chebyshev distance); positions from the frame on screen (living only) or from podiums.
 
-`def tribute_at(self, x: int, y: int, radius: float = 1.5) -> int | None`
+#### `Session.place_loot`, `Session.remove_loot`, `Session.clear_loot`
 
-The id of the tribute nearest to a cell (Chebyshev distance) within `radius`, using `positions()`. Ties go to the last one checked.
-
-#### `Session.positions`
-
-`def positions(self) -> dict[int, tuple[int, int]]`
-
-Living tributes' positions from the current frame if one is on screen, else every podium from the roster.
-
-#### `Session.place_loot`
-
-`def place_loot(self, x: int, y: int, kind: ResourceKind, quantity: int, quality: float) -> None`
-
-Replaces any hand-placed stack at the cell with a new `LootSpec`. Ignored off the grid or on void.
-
-#### `Session.remove_loot`
-
-`def remove_loot(self, x: int, y: int) -> None`
-
-Removes the hand-placed stack at a cell, if any.
-
-#### `Session.clear_loot`
-
-`def clear_loot(self) -> None`
-
-Empties `scenario.loot`.
+Hand-placed supplies: place (replacing any stack there; not on void), remove at a cell, clear all.
 
 #### `Session._scenario_for_game`
 
 `def _scenario_for_game(self) -> Scenario`
 
-A frozen copy for a game: the painted terrain as lists, `use_layout_loot`, a copy of the loot list, a copy of each `TributeSpec` (or `None` if the roster is empty), and the title.
+The painted terrain, `use_layout_loot`, a copy of the loot, copies of the tribute specs, and the title.
 
 #### `Session.new_game`
 
 `def new_game(self, seed: int | None = None) -> Game`
 
-Sets `config.num_players` to the roster size, builds a config copy with `seed` (or the config's seed), builds the `Game` from `_scenario_for_game()`, attaches a fresh `BehaviorTelemetry`, creates the `Recorder` (frame 0 is captured at once), points `recording` at it, rewinds, stops playback and resets the accumulator. Status: "New game, seed <n>".
+Keeps `num_players` equal to the roster size, builds a config copy with the seed, builds the `Game` on `_scenario_for_game()`, attaches a `BehaviorTelemetry`, starts a `Recorder`, watches its recording from frame 0, stops playback and resets the clock. Status: "New game, seed N".
 
-#### `Session.current_frame`
+#### `Session.current_frame`, `Session.at_live_edge`
 
-`@property def current_frame(self) -> Frame | None`
+`@property def current_frame(self) -> Frame | None`, `@property def at_live_edge(self) -> bool`
 
-The frame at the playhead, after clamping the playhead into the recording. `None` when nothing is loaded.
-
-#### `Session.at_live_edge`
-
-`@property def at_live_edge(self) -> bool`
-
-True when a recording exists and the playhead is on its last frame. True for finished games and loaded replays too.
+The frame at the (clamped) playhead; whether the playhead is on the newest frame.
 
 #### `Session.step_once`
 
 `def step_once(self) -> None`
 
-At the live edge of a game that is still running: `recorder.step()`, follow the new frame, and `_store_summary()`. At the live edge of a finished game or replay: `playing = False`. Behind the edge: `playhead += 1`.
+At the live edge of a running game: record one tick, follow it, store the summary if the game just ended; at the live edge of a finished game or a replay: stop playing; otherwise move the playhead forward.
 
 #### `Session.FEED_MODES`
 
@@ -208,284 +130,200 @@ At the live edge of a game that is still running: `recorder.step()`, follow the 
 FEED_MODES = ("off", "replay", "live")
 ```
 
-The values `feed_mode` may take, and the choices in the Train tab's "Training feed" radio button.
-
-| Mode | What the arena shows after every training step |
-| --- | --- |
-| `off` | Nothing changes; training only fills the plots |
-| `replay` | The step's showcase recording: one real game from that step (genetic: the population playing itself; reinforce: a training episode; imitation: the student's greedy validation game) |
-| `live` | A fresh game in which the newest champion drives the trainer's learner slots, so the Network tab shows real activations |
-
 #### `Session._feed_ready_for_next`
 
 `def _feed_ready_for_next(self) -> bool`
 
-Whether the arena is free for the next step. True with nothing loaded; for a loaded recording without a live game (a replay), true once `playhead >= recording.length - 1`; for a live game, true once `game.is_over` and the playhead is at the live edge. So a step is never shown while the previous one is still being watched.
+True when nothing is loaded, when a replay has reached its last frame, or when the live game is over and fully watched.
 
 #### `Session._advance_feed`
 
 `def _advance_feed(self) -> None`
 
-Called at the start of every `update`. Returns at once when `feed_mode == "off"` or there is no trainer. Otherwise it looks at `trainer.history`: if it holds no more steps than `_feed_steps_seen`, or `_feed_ready_for_next()` is false, nothing happens. Otherwise `_feed_steps_seen` catches up to the newest step (intermediate steps that finished while a game was being watched are skipped, not queued) and the newest step is shown. `step_name` is "generation" when `training_method` is `genetic` and "epoch" otherwise (reinforce and imitation); the step number in the labels is `len(history) - 1`.
-
-| Mode | Action | `feed_label` |
-| --- | --- | --- |
-| `replay`, showcase present | `load_recording(history[-1].showcase)` | "training feed: replaying a real generation 3 game" |
-| `replay`, showcase is `None` (`record_showcase` off, or imitation with 0 validation games) | Nothing loaded; returns before playing | "training feed: generation 3 has no recording" |
-| `live` | `start_champion_game(all_slots=False)` | "training feed: generation 3 champion playing live" |
-
-Then `playing = True`, at the current `ticks_per_second`. The dashboard prints `feed_label` in front of the headline while the feed is not `off`.
+Returns when the feed is off or there is no trainer. Reads `trainer.history`; returns when there is nothing newer than `_feed_steps_seen` or the arena is busy. Catches up to the newest step. The step name is `generation` when `training_method == "genetic"`, else `epoch`. In `replay` mode it loads the newest step's `showcase` (or sets the label "training feed: <step> N has no recording" and returns); in `live` mode it calls `start_champion_game(all_slots=False)`. Sets `feed_label` and starts playing.
 
 #### `Session.load_recording`
 
 `def load_recording(self, recording: Recording) -> None`
 
-Watches a `Recording` object. Sets `recording`, drops the live game (`game = recorder = telemetry = None`), shows the map it was played on (`painter.load(recording.terrain, recording.heights)`), adopts `recording.config`, and rebuilds `scenario.tributes` from `recording.roster` so names, districts, sexes, scores and brain names match the markers, with each podium set to the tribute's position in frame 0. Deselects, rewinds, stops. The hand-placed loot list is left as it was. Used by `load_replay` and by the feed's `replay` mode.
+Adopts the recording, drops the live game, recorder and telemetry, loads its map into the painter, adopts its config, rebuilds the roster from `recording.roster` with frame-0 positions as podiums, clears the selection, rewinds and stops.
 
 #### `Session.start_champion_game`
 
 `def start_champion_game(self, all_slots: bool = True) -> bool`
 
-Gives the trainer's champion to the roster and starts a game. Without a trainer or a champion: status "No champion yet: train first", returns `False`. With `all_slots=True` every tribute gets it (`give_champion(None)`); with `all_slots=False` only `trainer._learner_ids()` do, and the other tributes keep the brains and genomes they already have. Then `new_game()`, `playing = True`, returns `True`. Note that `give_champion` also sets `config.neural` to the trainer's architecture.
+Needs `trainer.champion`; otherwise status "No champion yet: train first" and False. Gives the champion to every tribute, or only to `trainer._learner_ids()` when `all_slots` is False, starts a new game and plays it.
 
 #### `Session.genome_history`
 
 `def genome_history(self) -> list[np.ndarray]`
 
-The champion genome after every step so far: `stats.champion` per generation for genetic (that generation's best, not the best ever); `stats.genome` per epoch for reinforce (the policy after that epoch's update) and for imitation (the student after that epoch). `[]` without a trainer.
+The learner after every iteration in `trainer.learning_history`, as flat vectors: a NEAT dictionary is reduced to its connection weights, anything else becomes a float array. Only vectors with the same length as the newest one are kept, because NEAT genomes grow and cannot be stacked with older, shorter ones.
 
 #### `Session.network_evolution`
 
 `def network_evolution(self, max_genes: int = 200) -> dict | None`
 
-Stacks `genome_history()` into a steps-by-genes matrix and returns `None` when it is empty. Otherwise:
-
-| Key | Value |
-| --- | --- |
-| `steps` | `[0, 1, ..., n - 1]` |
-| `change` | The L2 norm of `genome[i] - genome[i - 1]` per step; `0.0` for step 0 |
-| `mean_abs` | The mean absolute gene value per step |
-| `genes` | The matrix cut to its first `max_genes` columns, as a numpy array |
-| `gene_count` | The full number of genes |
-
-The Network tab's evolution plots draw `change` and `mean_abs` as lines and `genes` as a heat map.
+Stacks `genome_history()`; None when empty. Returns `steps`, `change` (the L2 norm of the difference from the previous step, 0 for the first), `mean_abs` per step, `genes` (the first `max_genes` columns) and `gene_count`.
 
 #### `Session.update`
 
 `def update(self, seconds: float) -> None`
 
-Called every UI frame. First `_advance_feed()`, whether or not playback is running. Then, while playing, adds `seconds * ticks_per_second` to the accumulator and runs whole ticks with `step_once`, at most 50 per call so the window stays responsive.
+`_advance_feed()`, then, while playing, accumulate `seconds * ticks_per_second` ticks and run whole ticks up to a budget of 50 per UI frame.
 
-#### `Session.run_to_end`
+#### `Session.run_to_end`, `Session._store_summary`, `Session.watched_summary`, `Session.export_behaviour_plots`
 
-`def run_to_end(self) -> None`
-
-If there is a live game, `recorder.record_all()`, jump to the last frame, stop, store the summary. Status: "Game finished". Does nothing for a loaded replay.
-
-#### `Session._store_summary`
-
-`def _store_summary(self) -> None`
-
-Appends `telemetry.summary()` to `watched_summaries` once, only when the game is over.
-
-#### `Session.watched_summary`
-
-`def watched_summary(self) -> dict | None`
-
-`BehaviorTelemetry.merge` of every stored summary plus the current game's tallies so far (if not yet stored). `None` before any game. The Charts tab reads this twice a second.
-
-#### `Session.export_behaviour_plots`
-
-`def export_behaviour_plots(self, folder: str | Path) -> int`
-
-Writes `behaviour_plots(summary, folder)` and returns how many files. The files are `action_distribution.png`, `actions_by_thirst.png`, `actions_by_hunger.png`, `actions_by_health.png`, `instinct_curves.png`, `consumption_timing.png`, `fight_or_flight.png`, `proximity_vs_remaining.png`, `actions_by_remaining.png`, `position_heatmap.png`, `armed_vs_unarmed_heatmaps.png` and `deaths_by_cause.png`. Status reports the count, or "No games watched yet".
+Finish the game instantly; keep the finished game's summary once; merge every finished game plus the current one; write the behaviour charts (`behaviour_plots`) and return the count.
 
 #### `Session.network_snapshot`
 
 `def network_snapshot(self, player_id: int | None) -> dict | None`
 
-What the selected tribute's network is doing now, for [visualizer.md](visualizer.md). Needs a live `game`, the id in `game.player_by_id`, a `NeuralBrain` and a `last_perception`. Returns `{"layer_sizes", "inputs", "activations", "weights", "probabilities", "chosen", "menu"}`: the perception vector, every layer's activation from `network.hidden_activations`, the weight matrices, the softmax of the last activation, `brain.last_index` and `MENU_NAMES`. Otherwise `None`.
+What the selected tribute's network is doing, for the visualizer. Needs a live game and a selected id in it.
 
-#### `Session.seek`
+If the tribute's brain is a `NeatBrain` and it has a `last_perception`, the snapshot is in **graph mode**: `genome = brain.genome_data`, `inputs = last_perception.to_vector()`, `values = genome.activations(inputs)` (a value per node id), `depth = genome.depths()`, `logits = genome.forward(inputs)`. Probabilities come from `brain.probabilities_of(logits)` when the brain has that method, else `brain.last_probabilities`, else a uniform vector. The dictionary is:
 
-`def seek(self, frame_index: int) -> None`
+| Key | Value |
+| --- | --- |
+| `graph` | `True` |
+| `nodes` | `[(id, kind, depth, value), ...]` for every node in the genome |
+| `edges` | `[(src, dst, weight), ...]` for enabled connections only |
+| `probabilities` | the action probabilities |
+| `chosen` | `brain.last_index` |
+| `menu` | `MENU_NAMES` |
 
-Moves the playhead, clamped into the recording.
+Otherwise the brain must be a `NeuralBrain` with a `last_perception`, and the snapshot is in **layer mode**: `layer_sizes`, `inputs`, `activations` (one array per layer from `network.hidden_activations`), `weights` (the matrices), `probabilities` (`brain.probabilities(logits)`), `chosen`, `menu`. Any other brain gives None.
 
-#### `Session.rewind`
+#### `Session.seek`, `Session.rewind`, `Session.event_log`
 
-`def rewind(self) -> None`
+Jump the playhead (clamped); back to frame 0; the last `last` (12) eliminations and gifts up to the playhead as text lines.
 
-`seek(0)`.
+#### `Session.save_scenario` ... `Session.export_gif`
 
-#### `Session.event_log`
-
-`def event_log(self, last: int = 12) -> list[str]`
-
-Lines for every elimination ("Day 3: Name out (spear by Killer), placed 12") and parachute ("Day 2: parachute for Name (medicine)") up to the playhead, newest last, trimmed to the last `last`.
-
-#### `Session.save_scenario`
-
-`def save_scenario(self, path: str | Path) -> None`
-
-Saves `_scenario_for_game()` as JSON, so the painted terrain is included.
-
-#### `Session.load_scenario`
-
-`def load_scenario(self, path: str | Path) -> None`
-
-Loads a scenario; if it has terrain, loads it into the painter and sets `config.width` and `config.height` to match. Adopts the loot and roster, sets `config.num_players`, deselects.
-
-#### `Session.save_config`
-
-`def save_config(self, path: str | Path) -> None`
-
-Writes `config.to_dict()` as indented JSON.
-
-#### `Session.load_config`
-
-`def load_config(self, path: str | Path) -> None`
-
-Replaces `config` with `SimulationConfig.from_dict(...)`. Nothing else changes; the dashboard follows up with `apply_config_change("size")`.
-
-#### `Session.save_replay`
-
-`def save_replay(self, path: str | Path) -> None`
-
-Pickles the recording, if there is one.
-
-#### `Session.load_replay`
-
-`def load_replay(self, path: str | Path) -> None`
-
-`load_recording(Recording.load(path))`, then status "Loaded replay from <path>". Everything it does to the map, config and roster is described under `load_recording`.
-
-#### `Session.export_gif`
-
-`def export_gif(self, path: str | Path, step: int = 2, fps: int = 15) -> None`
-
-Finishes the live game with `run_to_end()` first, then `export_recording_gif(recording, path, fps=fps, step=step)`. `step` is ticks per GIF frame.
+`save_scenario(path)`, `load_scenario(path)` (adopts the map, roster and loot; keeps `width`, `height` and `num_players` in step), `save_config(path)`, `load_config(path)`, `save_replay(path)`, `load_replay(path)` (through `load_recording`), `export_gif(path, step=2, fps=15)` (finishes the game first). Each sets a status line.
 
 #### `Session.training_running`
 
 `@property def training_running(self) -> bool`
 
-Whether the trainer thread is alive.
+Whether the training thread is alive.
+
+#### `Session.LEARNER_KINDS`
+
+```python
+LEARNER_KINDS = ("neural", "neat")
+```
+
+The brain kinds a learner can have. Tributes with these brains get a star on the arena, and roster genomes of these kinds count for a warm start.
 
 #### `Session.warm_start_genome`
 
-`def warm_start_genome(self) -> np.ndarray | None`
+`def warm_start_genome(self)`
 
-A genome to start the next training run from. Two places are checked, in order:
-
-| Order | Source | Condition |
-| --- | --- | --- |
-| 1 | `trainer.champion` | A trainer exists (from any earlier run this session, finished or stopped) and its champion is not `None` |
-| 2 | `spec.genome` of the first roster tribute | The spec has a genome and its `brain_name` is `"neural"` (for example after "Load champion into all" or "Champion to all") |
-
-Returns a float numpy array, or `None` when neither exists. It does not check that the genome fits the current `config.neural`; `give_champion` and `load_champion_into` keep `config.neural` in step with the genome they hand out, so it normally does.
+A genome to start the next run from. First choice: the current trainer's `champion`, returned as the dictionary itself for NEAT or as a float array otherwise. Second choice: the first roster tribute whose `brain_name` is in `LEARNER_KINDS` and whose `genome` is not None (for example after Load champion into all), converted the same way. Else None.
 
 #### `Session.start_training`
 
-`def start_training(self, settings: TrainingConfig | RLConfig | ImitationConfig, method: str = "genetic", warm_start: bool = False) -> None`
+`def start_training(self, settings, method: str = "genetic", warm_start: bool = False, curriculum: CurriculumConfig | None = None) -> None`
 
-Ignored if already running. Steps, in order:
+Refuses while a run is alive. Then:
 
-1. `initial = warm_start_genome() if warm_start else None`.
-2. A genetic run can only warm-start a brain of the same kind, and the stored genomes are neural. So when `method == "genetic"` and `settings.brain_name` is not `"neural"`, `initial` is set back to `None` without a message. (The check reads `getattr(settings, "brain_name", "neural")`, so settings without that field, such as `RLConfig` and `ImitationConfig`, always pass.)
-3. A config copy with `num_players = max(2, len(tributes) or config.num_players)` and a `Scenario` holding only the painted terrain.
-4. `training_method = method`; `_feed_steps_seen = 0` and `feed_label = ""`, so the feed starts from the new run's first step.
-5. The trainer, each built with `scenario=scenario` and `initial_genome=initial`:
+1. **Warm start.** `initial = warm_start_genome()` when asked. It is dropped (set back to None) when its kind does not fit the method: a dictionary is only accepted by `neat`, an array only by the other four; and `genetic` with `settings.brain_name` other than `neural` never warm-starts (a voting genome has 8 genes, a stored learner has thousands).
+2. **Config and map.** A config copy whose `num_players` is the roster size (at least 2), and a `Scenario` holding only the painted terrain.
+3. **Curriculum.** `Curriculum(curriculum)` when a config was given and `enabled` is true; else None.
+4. **Trainer.** `training_method = method`, the feed counters and `_paused` reset, then `builders[method](config, settings, scenario=scenario, initial_genome=initial, curriculum=curriculum_object)` with `builders = {"imitation": ImitationTrainer, "genetic": GeneticTrainer, "neat": NeatTrainer, "reinforce": ReinforceTrainer, "ppo": PPOTrainer}`. An unknown method raises `KeyError` on the calling thread.
+5. **Iterations.** `_max_iterations = int(getattr(settings, "epochs", getattr(settings, "generations", 0)))`: `epochs` for imitation, reinforce and PPO, `generations` for genetic and NEAT.
+6. **The loop.** A `progress(done, total)` callback stores `training_progress`. The thread body sets `trainer._stop = False`, then `while len(trainer.learning_history) < _max_iterations and not trainer._stop:` sleep 0.1 s if `_paused`, else `trainer.step(progress)`. On exit the status is "Training stopped" (stopped) or "Training finished"; any exception becomes "Training error: ...".
+7. **Status.** "Training (<method>[, warm start][, curriculum])...".
 
-| `method` | Trainer |
-| --- | --- |
-| `"genetic"` | `GeneticTrainer(config, settings, ...)`: a random population, or the seed genome plus relatives of it |
-| `"reinforce"` | `ReinforceTrainer(config, settings, ...)`: the policy starts from the seed genome; the value network starts fresh |
-| anything else (the dashboard passes `"imitation"`) | `ImitationTrainer(config, settings, ...)`: the student starts from the seed genome |
+#### `Session.pause_training`, `Session.training_paused`
 
-6. A daemon thread calls `trainer.run(on_progress=...)`, where the progress callback stores `(done, total)` in `training_progress` (for imitation, demonstration games during the first epoch). When the run returns, status becomes "Training stopped" (if `trainer._stop`) or "Training finished"; an exception inside the thread becomes "Training error: ...". Status while running: "Training (<method>)..." or "Training (<method>, warm start)..." when a genome was used.
+`def pause_training(self, paused: bool = True) -> None`, `@property def training_paused(self) -> bool`
 
-The trainers are documented in [../training/genetic.md](../training/genetic.md), [../training/reinforce.md](../training/reinforce.md) and `training/imitation.py`. The genetic trainer scores whole games by placement; reinforce rewards every action with `config.reward` and trains the neural brain only; imitation trains the neural brain to copy the voting brain's decisions with a cross-entropy loss (supervised learning), then plays greedy validation games each epoch.
+Set or clear `_paused` (status "Training paused" or "Training resumed"); read it. Pausing takes effect between iterations: the current `step` runs to its end.
+
+#### `Session.reset_training`
+
+`def reset_training(self) -> None`
+
+`stop_training()`, clear `_paused`, join the thread for up to 5 seconds, then forget the trainer, `training_progress`, `_feed_steps_seen` and `feed_label`. Status "Training reset". The roster keeps any champion genomes already handed out.
+
+#### `Session.training_events`
+
+`def training_events(self, count: int = 14) -> list[str]`
+
+`trainer.events.tail(count)`: the newest timestamped lines such as `[   12.3s] rollout    iteration 4: mean score 2.10, length 310 ticks, win rate 0.17`, `record     new best mean score 2.10`, `curriculum promoted to stage 1: 3 opponents`, `evolution  generation 3: 5 species, best 4.20, mean 1.05`, `info       collected 40120 demonstrations from 12 teacher games`. Empty without a trainer.
+
+#### `Session.learning_stats`
+
+`def learning_stats(self) -> dict`
+
+The learning statistics panel. With no history: `iteration 0`, `seed = config.seed`, and zeros for `seconds_per_iteration`, `max_score`, `learning_time`, `stage`, `opponents`, `mean_score`, `entropy`, `mean_length`. Otherwise from the last `IterationStats`: `iteration = last.iteration + 1`, `seed = trainer.settings.seed`, `seconds_per_iteration` = the mean of the last five `seconds`, `max_score` = the largest `best_score` so far, `learning_time = last.cumulative_seconds`, `stage`, `opponents`, `mean_score`, `entropy`, `mean_length`.
+
+#### `Session.learner_ids_on_screen`
+
+`def learner_ids_on_screen(self) -> set[int]`
+
+Which tributes get a star. Watching a recording with no live game (a loaded replay or a replay-feed game): the ids in `recording.roster` whose `brain` is in `LEARNER_KINDS`. Otherwise: the roster tributes whose `brain_name` is in `LEARNER_KINDS` and whose `genome` is not None.
 
 #### `Session.stop_training`
 
 `def stop_training(self) -> None`
 
-`trainer.stop()`: finish the current generation or epoch, then return.
+`trainer.stop()`: the loop ends after the current iteration.
 
 #### `Session.training_history`
 
 `def training_history(self) -> list`
 
-The trainer's stats objects so far (`GenerationStats`, `EpochStats` or `ImitationStats`), or `[]`.
+A copy of `trainer.history`: the method-specific stats (`GenerationStats`, `EpochStats`, `ImitationStats`; for NEAT the same list as `learning_history`).
 
 #### `Session.training_rows`
 
 `def training_rows(self) -> list[dict]`
 
-`trainer.history_rows()`: plain dictionaries without genomes, telemetry or showcase recordings.
+`[s.to_row() for s in trainer.learning_history]`: the unified rows every method shares (`iteration`, `mean_score`, `best_score`, `entropy`, `mean_length`, `win_rate`, `val_score`, `seconds`, `cumulative_seconds`, `stage`, `opponents`, and `extra_*` columns). The Train tab's plots read these.
 
-| Method | Row keys |
-| --- | --- |
-| Genetic | `generation`, `best_fitness`, `mean_fitness`, `worst_fitness`, `seconds`, `val_fitness`, `cumulative_seconds` |
-| Reinforce | `epoch`, `policy_loss`, `value_loss`, `entropy`, `train_return`, `val_return`, `train_survival`, `val_survival`, `win_rate`, `val_win_rate`, `kill_rate`, `seconds`, `cumulative_seconds` |
-| Imitation | `epoch`, `train_loss`, `val_loss`, `train_accuracy`, `val_accuracy`, `val_survival`, `val_win_rate`, `seconds`, `cumulative_seconds` |
+#### `Session.latest_scores`
 
-The Train tab plots these.
+`def latest_scores(self) -> list[float]`
+
+`learning_history[-1].scores`: one score per learner episode of the newest iteration (the "Latest scores" bars). For genetic and NEAT that is one fitness per genome in the population; for imitation the validation-game returns; for reinforce and PPO the returns of the collected episodes.
 
 #### `Session.champion_genes`
 
 `def champion_genes(self) -> tuple[np.ndarray, np.ndarray] | None`
 
-The latest step's genome and a boolean mask of genes that changed since the step before. Genetic: `history[-1].champion` against `trainer.previous_champion()`. Reinforce and imitation: `history[-1].genome` against `history[-2].genome`. A gene counts as changed when it moved by more than `1e-9`; on the first step every gene is marked changed. `None` without history.
+None without a trainer or with an empty `trainer.history`. Otherwise the newest `learning_history` learner as a vector (NEAT: its connection weights) and a boolean mask of genes that moved by more than `1e-9` since the previous iteration. When there is no previous iteration, or its vector has a different length (NEAT after a structural mutation), every gene counts as changed.
 
 #### `Session.save_training_run`
 
 `def save_training_run(self, name: str, results_dir: str | Path = "results") -> Path | None`
 
-`save_run(trainer, training_method, name, results_dir)`: writes `results/<name>_<timestamp>/` with `config.json` (the method, the simulation config and the trainer's `settings`), `history.json`, `champion.json` (through `trainer.save_champion`) and a `plots/` folder. Genetic plots: `fitness.png`, `fitness.gif`, `timing.png`. Reinforce plots: `reward.png`, `losses.png`, `entropy.png`, `survival.png`, `win_kill_rate.png`, `reward.gif`, `timing.png`. Imitation plots: `losses.png` (training and validation cross-entropy), `accuracy.png`, `survival.png`, `win_rate.png`, `losses.gif`, `timing.png`. When telemetry was collected, all three add `action_distribution_over_training.png`, `death_needs_over_training.png`, `behaviour_over_training.png` and the twelve behaviour charts of the last step. Returns the folder, or `None` (status "Nothing trained yet").
+`save_run(trainer, training_method, name, results_dir)`: writes `config.json`, `history.json`, `learning.json`, `events.txt`, `champion.json` and `plots/`. Status "Nothing trained yet" without history.
 
-#### `Session.sweep_running`
+#### `Session.sweep_running`, `Session.start_sweep`, `Session.stop_sweep`
 
-`@property def sweep_running(self) -> bool`
-
-Whether the sweep thread is alive.
-
-#### `Session.start_sweep`
-
-`def start_sweep(self, settings: SweepConfig) -> None`
-
-Ignored if running. Builds `Sweep(config, settings, scenario=<terrain only>)`, sets `sweep_progress = (0, len(values))` and runs it in a daemon thread. The sweep plays `games_per_value` seeded games per value, writes `results/<name>_<timestamp>/` with `config.json`, `results.csv`, `summary.json` and `plots/`, and reports each finished value into `sweep_progress`. Status on success: "Sweep saved to <folder>".
-
-#### `Session.stop_sweep`
-
-`def stop_sweep(self) -> None`
-
-`sweep.stop()`: finish the current value, write the folder, return.
+A `Sweep` on the painted map in a daemon thread with `sweep_progress` updates; stop after the current value.
 
 #### `Session.give_champion`
 
 `def give_champion(self, player_ids: list[int] | None = None) -> int`
 
-Loads `trainer.champion` into some tributes (all by default) and returns how many. The brain kind is `trainer.training.brain_name` for genetic, always `"neural"` for reinforce and imitation. Sets each spec's `brain_name` and `genome`, and sets `config.neural = trainer.config.neural` so the architecture matches. Returns 0 with no trainer or no champion.
+Needs `trainer.champion`. The brain kind handed out is `neat` for the NEAT method, `trainer.training.brain_name` for genetic, else `neural`. Each target spec gets that `brain_name` and the champion as its `genome`: the dictionary itself for NEAT, else `np.asarray(champion).tolist()`. Then `config.neural = trainer.config.neural` so neural champions keep the architecture they were trained with. Returns the count.
 
 #### `Session.save_champion`
 
 `def save_champion(self, path: str | Path) -> None`
 
-`trainer.save_champion(path)`, the same call for every trainer, when a trainer with a champion exists. Status: "Saved champion to <path>". Every file has `brain_name`, `neural` (the architecture), `genome` and `fitness`; the trainers add their own fields:
-
-| Trainer | Extra keys |
-| --- | --- |
-| Genetic | none; `fitness` is the champion's fitness |
-| Reinforce (`save_policy`) | `value_genome`, `value_hidden`, `epochs`, `method: "reinforce"`; `fitness` is the best validation return |
-| Imitation (`save_policy`) | `epochs`, `method: "imitation"`, `teacher`; `fitness` is minus the best validation loss |
+`trainer.save_champion(path)`. Every trainer writes the same file shape: `brain_name`, `genome`, `fitness`, plus method-specific fields (`neural` for neural champions; `method: "neat"` and `generations` for NEAT).
 
 #### `Session.load_champion_into`
 
 `def load_champion_into(self, path: str | Path, player_ids: list[int] | None = None) -> int`
 
-Reads a champion file with `GeneticTrainer.load_champion` (works for all three formats), sets `config.neural` from it, and gives its `brain_name` and genome to the targets. A neural champion loaded this way is what `warm_start_genome` falls back to when there is no trainer.
+Reads the file with `GeneticTrainer.load_champion` (which leaves a NEAT genome as a dictionary and turns anything else into an array). Sets `config.neural` when the file carries one. Each target spec gets the file's `brain_name` and the genome (the dictionary for NEAT, else a list). A file loaded this way is what `warm_start_genome` falls back to when there is no trainer.
 
 ## How to use it / experiment
 
@@ -498,54 +336,62 @@ s.new_game(seed=1)
 s.run_to_end()
 print(s.status, s.recording.result.winner_name)
 print(s.event_log(5))
-print(s.watched_summary()["entropy"])
 ```
 
-**Edit a roster and favour one tribute.**
+**Imitation first, then PPO from it.** This is the order the Train tab recommends.
 
 ```python
-spec = s.tributes[0]
-spec.name, spec.weapon_quality, spec.favor_bonus = "Katniss", 0.9, 0.5
-s.move_tribute(spec.player_id, 60, 10)
-s.arrange_podiums("two sides")     # or leave the drag in place
-s.save_scenario("mine.json")
-```
-
-**Train and watch the champion.**
-
-```python
-from hunger_games.training import TrainingConfig, RLConfig
-s.start_training(TrainingConfig(generations=3, population_size=24, workers=1), "genetic")
-s._training_thread.join()
-print(s.training_rows()[-1]["best_fitness"], s.champion_genes()[1].sum(), "genes changed")
-s.give_champion(); s.new_game(); s.run_to_end()
-s.save_training_run("demo")
-s.start_training(RLConfig(epochs=2, episodes_per_epoch=2), "reinforce")
-```
-
-**Imitation first, then a warm-started evolution.** This is the order the Train tab recommends.
-
-```python
-from hunger_games.training import ImitationConfig, TrainingConfig
+from hunger_games.training import ImitationConfig, PPOConfig, CurriculumConfig
 s = Session()
 s.start_training(ImitationConfig(epochs=5, demonstration_games=4), "imitation")
 s._training_thread.join()
-print(s.training_rows()[-1]["val_accuracy"])          # how often the student copies the teacher
-print(s.warm_start_genome() is not None)              # True: the imitation champion
-s.start_training(TrainingConfig(generations=3, population_size=24, mutation_scale=0.02),
-                 "genetic", warm_start=True)
-print(s.status)                                       # Training (genetic, warm start)...
+print(s.training_rows()[-1]["extra_val_accuracy"])     # how often the student copies the teacher
+print(s.warm_start_genome() is not None)               # True: the imitation champion
+s.start_training(PPOConfig(epochs=3, episodes_per_epoch=2), "ppo",
+                 warm_start=True, curriculum=CurriculumConfig(enabled=True))
+print(s.status)                                        # Training (ppo, warm start, curriculum)...
 s._training_thread.join()
-s.save_champion("champion.json")                      # the same call for every trainer
+print(s.learning_stats()["stage"], s.training_events(3))
+s.save_champion("champion.json")                       # the same call for every trainer
+```
+
+**Pause and resume from a script.**
+
+```python
+from hunger_games.training import RLConfig
+s.start_training(RLConfig(epochs=10, episodes_per_epoch=2), "reinforce")
+s.pause_training(True)          # the current iteration finishes, then the loop sleeps
+print(s.training_paused)        # True
+s.pause_training(False)
+s.stop_training()               # ends after the current iteration
+s._training_thread.join()
+s.reset_training()              # forget it
+```
+
+**NEAT and the graph snapshot.**
+
+```python
+from hunger_games.training import NeatTrainerConfig
+s = Session()
+s.start_training(NeatTrainerConfig(population_size=8, generations=2, validation_games=0), "neat")
+s._training_thread.join()
+print(isinstance(s.trainer.champion, dict))            # True: a NEAT genome dictionary
+s.start_champion_game(all_slots=False)                 # the learner slots get brain_name "neat"
+print(s.learner_ids_on_screen())                       # the starred tributes
+s.step_once()
+snap = s.network_snapshot(next(iter(s.learner_ids_on_screen())))
+print(snap["graph"], len(snap["nodes"]), len(snap["edges"]))
+print(len(s.champion_genes()[0]), "connection weights")
 ```
 
 **Drive the training feed by hand.** The feed only moves inside `update`, so call it in a loop as the dashboard does.
 
 ```python
+from hunger_games.training import TrainingConfig
 s = Session()
 s.feed_mode = "replay"
-s.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=3,
-                                rounds_per_generation=1, validation_games=0), "genetic")
+s.start_training(TrainingConfig(population_size=8, generations=3, rounds_per_generation=1,
+                                validation_games=0), "genetic")
 while s.training_running or s.recording is None:
     s.update(0.05)                       # shows the first showcase when a step exists
 print(s.feed_label)                      # training feed: replaying a real generation 0 game
@@ -553,36 +399,37 @@ s.feed_mode = "live"
 s.playhead = s.recording.length - 1      # finish watching so the arena is free
 s.update(0.05)                           # the champion now plays live in the learner slots
 print(s.feed_label, s.game is not None)
-print(s.network_evolution()["change"])   # how far the champion moved each step
 ```
 
-**Add a podium preset.** Add the name to `PODIUM_PRESETS` and an `elif preset == ...` branch that builds a list of `count` positions, snapping each with `arena.snap_to_podium`. The strength spreading and the combo pick it up automatically.
+**Add a training method.** Add the trainer class to the `builders` dictionary in `start_training`, make sure it exposes the shared interface (see Concepts), and decide in `give_champion` which `brain_name` it hands out. The dashboard needs a matching entry in `Dashboard.METHODS`.
 
-**Add a config reaction.** Add a branch to `apply_config_change` and pass its name as `react=` in the dashboard's `_setter`.
+**Add a podium preset.** Add the name to `PODIUM_PRESETS` and an `elif preset == ...` branch that builds a list of `count` positions, snapping each with `arena.snap_to_podium`.
 
 ## Gotchas
 
 - Trainers and sweeps get the painted map only. The hand-placed loot and the edited roster (names, granted items, podiums) are not used during training; `new_game` uses all of them.
 - `start_training` replaces `self.trainer`, so a second run drops the earlier history and champion unless you saved them. A warm start copies the champion into the new trainer first, so the genome itself survives.
 - `warm_start` defaults to `False` in `start_training`; the dashboard's checkbox defaults to on and passes its value every time.
-- A warm start for the genetic method with `brain_name="voting"` is dropped silently: the status line says "Training (genetic)..." with no "warm start". Voting brains have 8 genes and the stored genomes are neural networks, so they cannot be mixed.
-- `warm_start_genome` prefers `trainer.champion` over the roster. After "Load champion into all", the loaded file is only used when no trainer exists yet (or the trainer has no champion); otherwise the previous run's champion wins.
-- The trainer is built on the calling thread, before the `try` block. An error while building it (for example a warm-start genome whose length does not fit the current `config.neural` after the Brains tab was changed) is raised to the caller instead of becoming a status message.
-- The genetic warm start spreads the population with noise of `0.25 * mutation_scale`, and every later mutation uses the full `mutation_scale`. With the default 0.1 the instincts from imitation are quickly erased; the Train tab's tooltip suggests about 0.02.
-- The feed's `replay` mode goes through `load_recording`, which replaces the roster with the training game's roster (the trainer's generated tributes, on their frame-0 positions), replaces `config` with the trainer's config copy, and drops the live game. Save your scenario before turning it on.
+- A warm start is dropped silently when the kinds do not match: a NEAT champion cannot seed a neural method and a neural champion cannot seed NEAT, and `genetic` with `brain_name="voting"` never warm-starts. The status line then lacks "warm start".
+- `warm_start_genome` prefers `trainer.champion` over the roster. After Load champion into all, the loaded file is only used when no trainer exists yet (or the trainer has no champion); otherwise the previous run's champion wins. Reset training first to make the file win.
+- The trainer is built on the calling thread, before the thread's `try` block. An error while building it (for example a warm-start genome whose length does not fit the current `config.neural` after the Brains tab was changed) is raised to the caller instead of becoming a status message.
+- The loop counts `learning_history`, so a trainer whose `step` fails to append an iteration would loop forever; every shipped trainer appends one record per `step`.
+- Pause is not instant. `trainer.step` is one whole iteration (all its games and the update); the pause flag is only read between iterations. Stop is the same.
+- `reset_training` joins the thread for up to 5 seconds. A long iteration keeps the GUI waiting for that long, then the trainer is dropped while its thread may still be finishing the iteration in the background.
+- `_advance_feed` labels steps `generation` only for the genetic method; NEAT steps are labelled `epoch` in the headline.
+- The feed's `replay` mode goes through `load_recording`, which replaces the roster with the training game's roster, replaces `config` with the trainer's config copy (including its curriculum-sized `num_players`), and drops the live game. Save your scenario before turning it on.
 - The feed's `live` mode changes the roster too: `give_champion` writes `brain_name` and `genome` into the learner slots and sets `config.neural`.
-- The feed skips steps. If three generations finish while one game is being watched, only the newest is shown next; `_feed_steps_seen` jumps to the newest.
-- `feed_label` is never cleared by the feed itself. Switching the feed back to `off` hides it from the headline, but the string remains until the next `start_training`.
-- Showcase games from the `replay` feed have no telemetry (`load_recording` sets `telemetry = None`), so they never reach `watched_summaries` or the Charts tab.
-- An imitation run with `validation_games=0` has no showcase, no survival and no win rate: the `replay` feed reports "epoch N has no recording" and those curves stay at 0.
-- `training_progress` counts games within the current step, not steps; the step count comes from `training_history()`. For imitation the first epoch also counts the demonstration games.
-- `champion_genes` compares the latest step to the step before, while `trainer.champion` (used by `give_champion`, `start_champion_game` and `warm_start_genome`) is the best step ever for genetic, the best validation return for reinforce and the lowest validation loss for imitation. The bar chart and the brain you hand out can differ. `genome_history` follows the per-step genome, like the bar chart.
+- The feed skips steps. If three iterations finish while one game is being watched, only the newest is shown next.
+- `feed_label` is never cleared by the feed itself. Switching the feed back to `off` hides it from the headline, but the string remains until the next `start_training` or `reset_training`.
+- Showcase games from the `replay` feed have no telemetry, so they never reach `watched_summaries` or the Charts tab.
+- An imitation run with `validation_games=0` has no showcase and its scores, survival and win rate stay at 0.
+- `training_progress` counts games within the current iteration, not iterations. For imitation the first epoch also counts the demonstration games.
+- `champion_genes` and `genome_history` follow the learner after each iteration, while `trainer.champion` (used by `give_champion`, `start_champion_game` and `warm_start_genome`) is the best genome ever for genetic and NEAT, the best mean score for reinforce and PPO, and the lowest validation loss for imitation. The bar chart and the brain you hand out can differ.
+- For NEAT, `genome_history` drops every earlier step whose genome has a different number of connections, so the Network tab's evolution plots restart after each structural change.
+- `champion_genes` needs `trainer.history` to be non-empty but reads `learning_history`; for every shipped trainer both lists grow together.
+- `learner_ids_on_screen` stars every `neural` or `neat` entry of a recording's roster, whether or not it was trained, because a `RosterEntry` has no genome field.
+- `give_champion` with a curriculum-sized trainer config sets `config.neural` only; `num_players` stays the roster's. `start_champion_game(all_slots=False)` uses `trainer._learner_ids()`, which reads the trainer's `num_players`; with a curriculum the trainer's roster is smaller than yours, so the slots land in the low ids.
+- `network_snapshot` reads the live `Game`, not the frame at the playhead, so it always shows the newest decision even while scrubbing backwards, and returns None for loaded replays, including replay-feed games.
 - `load_recording` (so `load_replay` and the replay feed) replaces `config` with the recording's, and `load_config` replaces it too. Any code holding the old config object keeps the old one.
-- `at_live_edge` is also true for a loaded replay, where `recorder` is `None`; `step_once` then just stops playback at the last frame.
-- A game abandoned midway (New game pressed before it ended) never reaches `watched_summaries`; only finished games count in the charts and exports. `watched_summary()` does include the unfinished current game while it plays.
-- `network_snapshot` reads the live `Game`, not the frame at the playhead, so it always shows the newest decision even while scrubbing backwards, and returns `None` for loaded replays, including replay-feed games.
-- `positions()` drops the dead when a frame is on screen, so clicking where someone fell selects nobody.
-- `arrange_podiums("random")` uses an unseeded generator; the same button gives a different layout each press.
 - The status string is written from the training and sweep threads. It is a plain assignment, which is safe in CPython, but the message can be overwritten by the next button press.
-- `start_champion_game(all_slots=False)` calls the trainer's private `_learner_ids()`, which reads the trainer's `num_players`. If the roster grew or shrank since training started, the slots may not line up with the roster you see.
 - Replays are pickles (`Recording.load`). Only open replay files you made yourself.

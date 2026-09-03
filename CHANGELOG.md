@@ -6,6 +6,66 @@ Each entry was written from the working session that produced it; keep it
 that way: whenever code, docs or defaults change, add a line under
 **Unreleased** and move the block to a version heading when it ships.
 
+## 0.6.0 - 2026-09-02 (one learner, five methods, a research comparison)
+
+Requested, after reading the transcripts of the zombie (PPO), Monopoly
+(NEAT) and Battleship videos: train one network against the voting
+strategy with a star on it; a dashboard like the zombie video's (score bars,
+event monitor, average score, entropy and game-length graphs, learning
+statistics with a rollout bar, pause, reset and watch buttons, CPU and
+memory); a curriculum that grows the opposition; PPO and NEAT; imitation
+from winning games; and research that compares training methods,
+initialisations and network sizes, ending in a tournament.
+
+### Added
+- `training/common.py`: the shared `IterationStats` every method fills
+  (scores, mean, best, entropy, mean game length, win rate, validation
+  score, time, curriculum stage), an `EventLog`, a `Curriculum` (opponents
+  1, 3, 7, 11, 23 with promotion on a score threshold or a timeout), a
+  `SystemMonitor` (psutil), and `LearnerSpec` so worker processes can
+  rebuild any learner brain.
+- `training/ppo.py`: PPO with a clipped surrogate, several passes per
+  batch and GAE, on top of the REINFORCE machinery.
+- `brain/neat.py` and `training/neat.py`: NEAT genomes (node and
+  connection genes, innovation numbers, feed-forward by depth), mutation,
+  crossover, compatibility distance, species with fitness sharing,
+  stagnation and an adaptive threshold; a `NeatBrain`; a champion file
+  with `brain_name: neat`.
+- Every trainer takes `curriculum=` and `initial_genome=`, exposes
+  `learning_history`, `events`, `settings`, `step()`, `learner_spec()` and
+  `champion_spec()`; the genetic trainer's default opponents are now the
+  voting brain (`opponents="voting"`, scored by episode return) with
+  `"self"` keeping the old tournament; imitation can learn from winners
+  only (`winners_top`).
+- `research/comparison.py` and `experiments/run_comparison.py`: train
+  variants (methods, sizes, initializers, warm starts, curriculum) under one
+  budget, run a 75-game tournament of the champions, and write results.csv,
+  a LaTeX table, overlay learning curves, tournament charts, lines-of-code
+  and training-time charts, and a generated report.md.
+- Dashboard: the Train tab is now the training dashboard (method combo with
+  help text, curriculum toggle, Start, Pause, Stop, Reset, Watch agent,
+  score bars, event monitor, average score, entropy and game-length graphs,
+  learning statistics with the rollout bar, CPU and memory); learners wear a
+  gold star on the arena; the Network tab draws NEAT genomes as graphs.
+- Run folders gain `learning.json` (the shared curves), `events.txt` and
+  shared learning-curve PNGs.
+
+### Changed
+- `save_run` uses every trainer's `settings` and `save_champion`.
+- The dashboard's default method is imitation; the tutorial's train step
+  runs a short imitation with the live feed.
+
+### Fixed
+- `run_comparison.py --warm` with `--sizes` or `--initializers` now
+  warm-starts each variant from the imitation variant with the same suffix
+  (imitation variants are ordered first automatically); before, the lookup
+  missed and every variant started cold.
+- NEAT's stagnation rule now really protects the champion's species (the
+  old check compared against a copy and never matched).
+- PPO champion files are labelled `"method": "ppo"`.
+- `create_brain("neat", ...)` builds a minimal random NEAT genome, so a
+  roster tribute set to NEAT without a genome plays instead of crashing.
+
 ## 0.5.0 - 2026-09-02 (instincts by imitation)
 
 Requested: neural tributes kept dying of thirst during training; instincts

@@ -130,11 +130,16 @@ class Game:
 
     # ------------------------------------------------------------- setup
 
-    def _make_brain(self, index: int, name: str, genome: list[float] | None) -> Brain:
+    def _make_brain(self, index: int, name: str, genome: list[float] | dict | None) -> Brain:
         """Build one brain: the factory wins, otherwise the named kind with an optional genome."""
         # A factory (used by trainers) overrides everything.
         if self.brain_factory is not None:
             return self.brain_factory(index, self.rng)
+        # A NEAT genome is a dictionary of nodes and connections, not a flat vector.
+        if name == "neat" and isinstance(genome, dict):
+            from hunger_games.brain.neat import NeatBrain, NeatGenome  # noqa: PLC0415 - avoid an import cycle
+
+            return NeatBrain(NeatGenome.from_dict(genome), chaos=self.config.chaos)
         # Build the named kind with the config's neural architecture and instinct toggles.
         brain = create_brain(name, self.config.chaos, self.rng, self.config.neural, self.config.endgame_instinct)
         # Load a saved genome if the roster has one.

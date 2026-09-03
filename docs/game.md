@@ -1,8 +1,8 @@
 # `game.py`
 
 **Source:** [hunger_games/game.py](../hunger_games/game.py)
-**Depends on:** [actions.py](actions.md) (`Action`, `ActionType`), [arena.py](arena.md) (`Arena`), [brain/init.md](brain/init.md) (`Brain`, `create_brain`), [config.py](config.md) (`SimulationConfig`), [districts.py](districts.md) (`SEXES`, `default_tribute_name`), [gamemaker.py](gamemaker.md) (`Gamemaker`), [perception.py](perception.md) (`Perception`), [player.py](player.md) (`Player`), [records.py](records.md) (`Elimination`, `EliminationMethod`, `GameResult`, `PlayerResult`), [resources.py](resources.md) (`ResourceKind`, `build_layout`, `weapon_name`), [scenario.py](scenario.md) (`Scenario`, `TributeSpec`), [sponsors.py](sponsors.md) (`SponsorGift`, `SponsorPool`), `numpy`, and `collections.abc.Callable`.
-**Used by:** [runner.py](runner.md), [init.md](init.md), [main.md](main.md), [renderer.py](renderer.md), [recorder.py](recorder.md), `research/telemetry.py` (attaches hooks), [training/genetic.md](training/genetic.md), `training/reinforce.py` (attaches hooks), `ui/session.py`, and [tests/test_game.md](tests/test_game.md), [tests/test_scenario.md](tests/test_scenario.md), [tests/test_brains.md](tests/test_brains.md), [tests/test_recorder_training.md](tests/test_recorder_training.md), `tests/test_research.py`.
+**Depends on:** [actions.py](actions.md) (`Action`, `ActionType`), [arena.py](arena.md) (`Arena`), [brain/init.md](brain/init.md) (`Brain`, `create_brain`), `brain/neat.py` (`NeatBrain`, `NeatGenome`, imported inside `_make_brain` only when a NEAT roster genome is met), [config.py](config.md) (`SimulationConfig`), [districts.py](districts.md) (`SEXES`, `default_tribute_name`), [gamemaker.py](gamemaker.md) (`Gamemaker`), [perception.py](perception.md) (`Perception`), [player.py](player.md) (`Player`), [records.py](records.md) (`Elimination`, `EliminationMethod`, `GameResult`, `PlayerResult`), [resources.py](resources.md) (`ResourceKind`, `build_layout`, `weapon_name`), [scenario.py](scenario.md) (`Scenario`, `TributeSpec`), [sponsors.py](sponsors.md) (`SponsorGift`, `SponsorPool`), `numpy`, and `collections.abc.Callable`.
+**Used by:** [runner.py](runner.md), [init.md](init.md), [main.md](main.md), [renderer.py](renderer.md), [recorder.py](recorder.md), `research/telemetry.py` (attaches hooks), [training/genetic.md](training/genetic.md), `training/reinforce.py` (attaches hooks), `training/imitation.py`, `ui/session.py`, and [tests/test_game.md](tests/test_game.md), [tests/test_scenario.md](tests/test_scenario.md), [tests/test_brains.md](tests/test_brains.md), [tests/test_recorder_training.md](tests/test_recorder_training.md), [tests/test_research.md](tests/test_research.md).
 
 ## Purpose
 
@@ -23,6 +23,10 @@ Two things make it useful for research. A `brain_factory` lets a trainer supply 
 **Leading underscores.** `_make_brain`, `_resolve_action`, `_eliminate` and so on are internal. `step`, `run`, `result`, `field_knowledge` and `days_survived` are the public surface.
 
 **Idempotent finish.** `_finish` uses a `finished` flag so it can be called from `step`, `run` and `result` without assigning placings twice.
+
+**Two shapes of genome.** The voting and neural brains store their genome as a flat list of numbers. A NEAT brain stores its genome as a dictionary of node and connection genes, because its network shape is part of what evolves. `_make_brain` tells the two apart with `isinstance(genome, dict)`.
+
+**Lazy imports.** `from hunger_games.brain.neat import NeatBrain, NeatGenome` sits inside `_make_brain` rather than at the top of the file. `brain/neat.py` imports things that import `game.py`, so a top-level import would be a cycle. The `# noqa: PLC0415` comment tells ruff this is on purpose.
 
 ## Walkthrough
 
@@ -61,10 +65,16 @@ Setup, in order:
 ### `Game._make_brain`
 
 ```python
-def _make_brain(self, index: int, name: str, genome: list[float] | None) -> Brain
+def _make_brain(self, index: int, name: str, genome: list[float] | dict | None) -> Brain
 ```
 
-If a `brain_factory` was given it wins outright. Otherwise `create_brain(name, config.chaos, self.rng, config.neural, config.endgame_instinct)` builds the named kind. The fifth argument is the endgame flag: `create_brain` passes it to `VotingBrain(endgame=...)` and ignores it for other brains. A roster genome, if present, is loaded with `set_genome`.
+Builds one tribute's brain. Three cases, checked in this order:
+
+1. **A factory wins outright.** If a `brain_factory` was given, `self.brain_factory(index, self.rng)` is returned and `name` and `genome` are ignored. Trainers use this.
+2. **A NEAT genome.** If `name == "neat"` and `genome` is a dictionary, `NeatBrain(NeatGenome.from_dict(genome), chaos=self.config.chaos)` is returned. `NeatGenome.from_dict` rebuilds the node and connection genes from the plain lists a champion file or a saved scenario holds. This branch never calls `create_brain`, so `config.neural` and `config.endgame_instinct` play no part.
+3. **A named kind.** Otherwise `create_brain(name, config.chaos, self.rng, config.neural, config.endgame_instinct)` builds the named kind. The fifth argument is the endgame flag: `create_brain` passes it to `VotingBrain(endgame=...)` and ignores it for other brains. A roster genome, if present, is loaded with `brain.set_genome(np.asarray(genome, dtype=float))`.
+
+The roster's `genome` field comes from `TributeSpec.genome` (see [scenario.md](scenario.md)). The dashboard fills it in with a flat list for voting and neural champions and with a dictionary for NEAT champions.
 
 ### `Game._start_value`
 
@@ -80,7 +90,7 @@ A roster value wins (clipped to 0.01..1.0). Otherwise a uniform draw between `mi
 def _create_players(self) -> list[Player]
 ```
 
-Uses `scenario.tributes` if there are any, else `_generated_spec(index)` for each of `config.num_players`. For each spec it builds the brain, the `Player`, the three starting bars, and copies `weapon_quality`, `food`, `medicine` and `favor_bonus` from the spec.
+Uses `scenario.tributes` if there are any, else `_generated_spec(index)` for each of `config.num_players`. For each spec it calls `_make_brain(index, spec.brain_name, spec.genome)`, builds the `Player`, sets the three starting bars, and copies `weapon_quality`, `food`, `medicine` and `favor_bonus` from the spec.
 
 ### `Game._generated_spec`
 
@@ -88,7 +98,7 @@ Uses `scenario.tributes` if there are any, else `_generated_spec(index)` for eac
 def _generated_spec(self, index: int) -> TributeSpec
 ```
 
-District `(index // 2) % 12 + 1`, sex alternating F then M, training score `normal(6.5, 2.5)` rounded and clipped to 1..12, survival score `0.6 * score / 12 + 0.4 * random` clipped to 0.05..0.95, name from `default_tribute_name`, brain from `config.brain_name`.
+District `(index // 2) % 12 + 1`, sex alternating F then M, training score `normal(6.5, 2.5)` rounded and clipped to 1..12, survival score `0.6 * score / 12 + 0.4 * random` clipped to 0.05..0.95, name from `default_tribute_name`, brain from `config.brain_name`. The `genome` field is left at `None`, so generated tributes always get a fresh brain.
 
 ### `Game._place_players`
 
@@ -269,6 +279,21 @@ from hunger_games.brain import create_brain
 game = Game(config, brain_factory=lambda index, rng: create_brain("neural", 0.5, rng, config.neural))
 ```
 
+Put a saved NEAT champion into one tribute through the roster. The champion file's `genome` is already the dictionary `_make_brain` expects:
+
+```python
+import json
+from hunger_games.scenario import Scenario, TributeSpec
+
+data = json.load(open("results/neat_run/champion.json"))
+roster = [
+    TributeSpec(0, "Learner", 1, "F", 8, 0.6, brain_name="neat", genome=data["genome"]),
+    TributeSpec(1, "Rival", 1, "M", 8, 0.6, brain_name="voting"),
+]
+game = Game(SimulationConfig(width=60, height=60, seed=1), scenario=Scenario(tributes=roster))
+print(game.players[0].brain.name, game.players[0].brain.describe())
+```
+
 To step manually (the renderer and dashboard do this), call `game.step()` in a loop and read `game.players`, `game.gamemaker.safe_radius` and `game.eliminations` between calls.
 
 ## Gotchas
@@ -277,6 +302,8 @@ To step manually (the renderer and dashboard do this), call `game.step()` in a l
 - Decision hooks fire before the action resolves. To see the effect of an action, use a tick hook and compare with what you saved in the decision hook.
 - Tick hooks run after `tick += 1`, so `game.tick` inside a tick hook is one more than the tick the decisions were made on.
 - `tick_hooks` receive the game after `_environment_tick` but before `_finish`, so brains have not yet been told the outcome when the last tick hook runs. Check `game.is_over` inside the hook if you need end-of-game handling, as telemetry does.
-- `brain_factory` completely bypasses `config.brain_name`, roster brain names, roster genomes and `endgame_instinct`.
+- `brain_factory` completely bypasses `config.brain_name`, roster brain names, roster genomes (flat or NEAT) and `endgame_instinct`.
+- A roster entry with `brain_name="neat"` and a dictionary genome gets that genome; with `genome=None` it falls through to `create_brain("neat", ...)`, which builds a minimal random NEAT genome (inputs wired straight to the outputs), so the tribute plays but has no training behind it. A flat list is not a NEAT genome and would be rejected by `NeatBrain.set_genome` unless its length matches the connection count.
+- The NEAT branch uses `config.chaos` for the brain's temperature and ignores `config.neural`. A NEAT genome carries its own shape, so there is no architecture to mismatch, but it still expects the 50-number perception vector it was trained on.
 - A game that is over from the start (for example one player) still gets bookkeeping via `run` calling `_finish` explicitly.
 - `field_knowledge` compares training scores strictly (`<`), so tributes with equal scores do not count as weaker.

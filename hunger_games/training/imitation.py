@@ -42,7 +42,7 @@ from hunger_games.brain import Brain, create_brain
 from hunger_games.brain.mlp import Adam
 
 # The student network and the menu.
-from hunger_games.brain.neural import NeuralBrain, softmax
+from hunger_games.brain.neural import MENU_SIZE, NeuralBrain, softmax
 
 # Settings.
 from hunger_games.config import SimulationConfig
@@ -56,6 +56,9 @@ from hunger_games.recorder import Recording
 
 # Custom setups.
 from hunger_games.scenario import Scenario
+
+# Shared training pieces.
+from hunger_games.training.common import Curriculum, EventLog, IterationStats, LearnerSpec, learner_ids
 
 # Greedy validation games reuse the RL episode player.
 from hunger_games.training.reinforce import play_rl_episode
@@ -92,6 +95,8 @@ class ImitationConfig:
     seed: int | None = None
     # Whether to record the validation game for the dashboard's training feed.
     record_showcase: bool = True
+    # Learn only from tributes that placed this well or better in their demonstration game (0 = everyone).
+    winners_top: int = 0
 
 
 @dataclass
@@ -130,9 +135,16 @@ class ImitationStats:
 
 
 def collect_demonstration_game(
-    config: SimulationConfig, scenario: Scenario | None, teacher: str, seed: int, teacher_chaos: float = 0.0
+    config: SimulationConfig,
+    scenario: Scenario | None,
+    teacher: str,
+    seed: int,
+    teacher_chaos: float = 0.0,
+    winners_top: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Play one game with the teacher brain and return every (perception vector, menu index) pair."""
+    """Play one game with the teacher brain and return every (perception vector, menu index) pair,
+    optionally keeping only the decisions of tributes that placed in the top `winners_top`.
+    """
     # A config copy with this game's seed and the teacher's chaos.
     game_config = SimulationConfig(**{**config.to_dict_raw(), "seed": seed, "chaos": teacher_chaos})
 
@@ -142,20 +154,29 @@ def collect_demonstration_game(
 
     # The game.
     game = Game(game_config, 0, brain_factory=factory, scenario=scenario)
-    # The samples.
+    # The samples, with who made each decision.
     vectors: list[np.ndarray] = []
     labels: list[int] = []
+    owners: list[int] = []
 
     # Record each decision.
     def on_decision(player, perception, action) -> None:
         vectors.append(perception.to_vector())
         labels.append(NeuralBrain.action_to_menu_index(action))
+        owners.append(player.player_id)
 
     # Hook and play.
     game.decision_hooks.append(on_decision)
-    game.run()
+    result = game.run()
     # Arrays.
-    return np.asarray(vectors, dtype=float), np.asarray(labels, dtype=int)
+    x = np.asarray(vectors, dtype=float)
+    y = np.asarray(labels, dtype=int)
+    # Keep only the winners' decisions if asked ("show it a few winning games").
+    if winners_top > 0:
+        keep_ids = {row.player_id for row in result.players if 0 < row.placement <= winners_top}
+        mask = np.asarray([pid in keep_ids for pid in owners], dtype=bool)
+        x, y = x[mask], y[mask]
+    return x, y
 
 
 def _demo_job(args: tuple) -> tuple[np.ndarray, np.ndarray]:
@@ -179,12 +200,19 @@ class ImitationTrainer:
         imitation: ImitationConfig,
         scenario: Scenario | None = None,
         initial_genome: np.ndarray | None = None,
+        curriculum: Curriculum | None = None,
     ) -> None:
         """Create the student (fresh, or from a genome) and an empty history."""
         # Settings.
         self.config = config
         # Learner settings.
         self.imitation = imitation
+        # A curriculum only changes the validation games' roster size here.
+        self.curriculum = curriculum
+        # Events and the unified history.
+        self.events = EventLog()
+        self.learning_history: list[IterationStats] = []
+        self.best_mean_score = -np.inf
         # Optional custom setup.
         self.scenario = scenario
         # The trainer's own randomness.
@@ -222,10 +250,24 @@ class ImitationTrainer:
 
     def _learner_ids(self) -> list[int]:
         """Which tribute slots the student drives in validation games (spread across the roster)."""
-        # How many.
-        count = min(self.imitation.learners_per_game, self.config.num_players)
-        # Spread.
-        return [int(i * self.config.num_players / count) for i in range(count)]
+        # Shared rule.
+        return learner_ids(self.config.num_players, self.imitation.learners_per_game)
+
+    def learner_spec(self) -> LearnerSpec:
+        """The current student as a learner spec."""
+        # Neural.
+        return LearnerSpec("neural", self.policy.genome().copy(), self.config.neural)
+
+    def champion_spec(self) -> LearnerSpec:
+        """The best student so far."""
+        # Neural.
+        return LearnerSpec("neural", np.asarray(self.champion, dtype=float), self.config.neural)
+
+    def step(self, on_progress: Callable[[int, int], None] | None = None) -> IterationStats:
+        """One epoch in the shared shape."""
+        # Run and hand back the unified record.
+        self.step_epoch(on_progress)
+        return self.learning_history[-1]
 
     # ---------------------------------------------------------- data
 
@@ -235,7 +277,15 @@ class ImitationTrainer:
         seeds = [int(self.rng.integers(2**31 - 1)) for _ in range(self.imitation.demonstration_games)]
         # Jobs.
         jobs = [
-            (self.config, self.scenario, self.imitation.teacher, seed, self.imitation.teacher_chaos) for seed in seeds
+            (
+                self.config,
+                self.scenario,
+                self.imitation.teacher,
+                seed,
+                self.imitation.teacher_chaos,
+                self.imitation.winners_top,
+            )
+            for seed in seeds
         ]
         # Results.
         results = []
@@ -261,6 +311,10 @@ class ImitationTrainer:
         split = int(len(x) * (1.0 - self.imitation.validation_fraction))
         self.train_x, self.train_y = x[:split], y[:split]
         self.val_x, self.val_y = x[split:], y[split:]
+        # Say so.
+        self.events.add(
+            "info", f"collected {len(x)} demonstrations from {self.imitation.demonstration_games} teacher games"
+        )
         # How many samples.
         return len(x)
 
@@ -312,7 +366,7 @@ class ImitationTrainer:
             self.best_val_loss = val_loss
             self.best_genome = self.policy.genome().copy()
         # Greedy validation games.
-        val_survival, val_win_rate, telemetry, showcase = self._validate()
+        val_survival, val_win_rate, telemetry, showcase, val_returns = self._validate()
         # Stats.
         stats = ImitationStats(
             epoch=self.epoch,
@@ -331,14 +385,50 @@ class ImitationTrainer:
         # Record.
         self.history.append(stats)
         self.epoch += 1
+        # The unified record (scores are the validation returns; entropy is the student's on the held-out set).
+        probabilities = (
+            softmax(self.policy.forward(self.val_x)) if len(self.val_x) else np.ones((1, MENU_SIZE)) / MENU_SIZE
+        )
+        student_entropy = float(-(probabilities * np.log(probabilities + 1e-12)).sum(axis=1).mean())
+        record = IterationStats(
+            iteration=stats.epoch,
+            scores=list(val_returns),
+            mean_score=float(np.mean(val_returns)) if val_returns else 0.0,
+            best_score=float(max(val_returns)) if val_returns else 0.0,
+            entropy=student_entropy,
+            mean_length=val_survival,
+            win_rate=val_win_rate,
+            val_score=float(np.mean(val_returns)) if val_returns else 0.0,
+            seconds=stats.seconds,
+            cumulative_seconds=stats.cumulative_seconds,
+            stage=0,
+            opponents=self.config.num_players - 1,
+            extra={
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "train_accuracy": train_accuracy,
+                "val_accuracy": val_accuracy,
+            },
+            learner=stats.genome,
+            telemetry=telemetry,
+            showcase=showcase,
+        )
+        self.learning_history.append(record)
+        self.events.add(
+            "rollout",
+            f"epoch {stats.epoch}: accuracy {val_accuracy:.0%}, loss {val_loss:.3f}, validation score {record.val_score:.2f}",
+        )
+        if record.mean_score > self.best_mean_score:
+            self.best_mean_score = record.mean_score
+            self.events.add("record", f"new best validation score {record.mean_score:.2f}")
         # Done.
         return stats
 
-    def _validate(self) -> tuple[float, float, dict, Recording | None]:
+    def _validate(self) -> tuple[float, float, dict, Recording | None, list[float]]:
         """Play the student greedily on the fixed validation seeds."""
         # None asked for.
         if self.imitation.validation_games <= 0:
-            return 0.0, 0.0, {}, None
+            return 0.0, 0.0, {}, None, []
         # Jobs (the first records the showcase).
         genome = self.policy.genome()
         learners = self._learner_ids()
@@ -369,7 +459,7 @@ class ImitationTrainer:
 
         telemetry = BehaviorTelemetry.merge([episode["telemetry"] for episode in episodes])
         # Done.
-        return survival, win_rate, telemetry, episodes[0].get("recording")
+        return survival, win_rate, telemetry, episodes[0].get("recording"), [o["return"] for o in outcomes]
 
     def run(
         self,

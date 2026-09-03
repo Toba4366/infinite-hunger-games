@@ -12,6 +12,9 @@ import json
 # Background training.
 import threading
 
+# Pausing the training loop.
+import time
+
 # Filesystem paths.
 from pathlib import Path
 
@@ -22,7 +25,7 @@ import numpy as np
 from hunger_games.arena import Arena
 
 # The neural brain, for the network visualiser.
-from hunger_games.brain.neural import MENU_NAMES, NeuralBrain
+from hunger_games.brain.neural import MENU_NAMES, MENU_SIZE, NeuralBrain
 
 # The settings.
 from hunger_games.config import SimulationConfig
@@ -55,12 +58,14 @@ from hunger_games.terrain import TerrainType
 
 # The trainers and run folders.
 from hunger_games.training import (
+    Curriculum,
+    CurriculumConfig,
     GeneticTrainer,
-    ImitationConfig,
     ImitationTrainer,
+    NeatTrainer,
+    PPOTrainer,
     ReinforceTrainer,
-    RLConfig,
-    TrainingConfig,
+    SystemMonitor,
     save_run,
 )
 
@@ -113,6 +118,12 @@ class Session:
         self.sweep_progress = (0, 0)
         # The training feed: "off", "replay" (real evaluation games) or "live" (the new champion plays live).
         self.feed_mode = "off"
+        # Pause flag for the training loop.
+        self._paused = False
+        # How many iterations the current run should do.
+        self._max_iterations = 0
+        # CPU and memory readings.
+        self.system = SystemMonitor()
         # How many training steps the feed has already shown.
         self._feed_steps_seen = 0
         # A label for the headline while the feed is showing something.
@@ -539,14 +550,21 @@ class Session:
         return True
 
     def genome_history(self) -> list[np.ndarray]:
-        """The champion genome after every training step so far."""
+        """The learner after every training step so far, as flat vectors (NEAT: its connection weights)."""
         # Nothing.
         if self.trainer is None:
             return []
-        # GA champions or RL policies.
-        if self.training_method == "genetic":
-            return [stats.champion for stats in self.trainer.history]
-        return [stats.genome for stats in self.trainer.history]
+        vectors = []
+        for stats in self.trainer.learning_history:
+            learner = stats.learner
+            vectors.append(
+                np.asarray([c[3] for c in learner["connections"]], dtype=float)
+                if isinstance(learner, dict)
+                else np.asarray(learner, dtype=float)
+            )
+        # Only steps of equal length can be stacked (NEAT genomes grow).
+        size = vectors[-1].size if vectors else 0
+        return [v for v in vectors if v.size == size]
 
     def network_evolution(self, max_genes: int = 200) -> dict | None:
         """How the champion genome changed over training: change size per step and a genes-by-steps matrix."""
@@ -645,6 +663,32 @@ class Session:
             return None
         # The tribute.
         player = self.game.player_by_id[player_id]
+        # NEAT brains are drawn as a graph.
+        from hunger_games.brain.neat import NeatBrain
+
+        if isinstance(player.brain, NeatBrain) and player.last_perception is not None:
+            genome = player.brain.genome_data
+            inputs = player.last_perception.to_vector()
+            values = genome.activations(inputs)
+            depth = genome.depths()
+            logits = genome.forward(inputs)
+            probabilities = (
+                player.brain.probabilities_of(logits)
+                if hasattr(player.brain, "probabilities_of")
+                else (
+                    player.brain.last_probabilities
+                    if player.brain.last_probabilities is not None
+                    else np.ones(MENU_SIZE) / MENU_SIZE
+                )
+            )
+            return {
+                "graph": True,
+                "nodes": [(n.id, n.kind, depth[n.id], values[n.id]) for n in genome.nodes],
+                "edges": [(c.src, c.dst, c.weight) for c in genome.connections if c.enabled],
+                "probabilities": probabilities,
+                "chosen": player.brain.last_index,
+                "menu": MENU_NAMES,
+            }
         # Must be neural with a perception to feed.
         if not isinstance(player.brain, NeuralBrain) or player.last_perception is None:
             return None
@@ -774,70 +818,158 @@ class Session:
         # Check the thread.
         return self._training_thread is not None and self._training_thread.is_alive()
 
-    def warm_start_genome(self) -> np.ndarray | None:
-        """A genome to start the next training run from: the current champion, else a trained roster genome."""
-        # The current trainer's champion.
+    # The learner brain kinds (tributes with these brains get a star on the arena).
+    LEARNER_KINDS = ("neural", "neat")
+
+    def warm_start_genome(self):
+        """A genome to start the next run from: the current champion, else a trained roster genome."""
+        # The current trainer's champion (a flat array, or a NEAT genome dictionary).
         if self.trainer is not None and self.trainer.champion is not None:
-            return np.asarray(self.trainer.champion, dtype=float)
-        # Else the first roster tribute carrying a neural genome (for example a loaded champion file).
+            champion = self.trainer.champion
+            return champion if isinstance(champion, dict) else np.asarray(champion, dtype=float)
+        # Else the first roster tribute carrying a learner genome (for example a loaded champion file).
         for spec in self.tributes:
-            if spec.genome is not None and spec.brain_name == "neural":
-                return np.asarray(spec.genome, dtype=float)
+            if spec.genome is not None and spec.brain_name in self.LEARNER_KINDS:
+                return spec.genome if isinstance(spec.genome, dict) else np.asarray(spec.genome, dtype=float)
         # Nothing to start from.
         return None
 
     def start_training(
         self,
-        settings: TrainingConfig | RLConfig | ImitationConfig,
+        settings,
         method: str = "genetic",
         warm_start: bool = False,
+        curriculum: CurriculumConfig | None = None,
     ) -> None:
-        """Start a trainer (genetic, reinforce or imitation) in a background thread on the painted map."""
+        """Start a trainer (imitation, genetic, neat, reinforce or ppo) in a background thread on the painted map."""
         # One at a time.
         if self.training_running:
             return
-        # A genome to start from, if asked and available (only neural genomes fit neural trainers).
+        # A genome to start from, if asked and available; only a matching kind fits.
         initial = self.warm_start_genome() if warm_start else None
-        # The genetic trainer can only warm-start a brain of the same kind.
-        if method == "genetic" and initial is not None and getattr(settings, "brain_name", "neural") != "neural":
-            initial = None
+        if initial is not None:
+            wants_neat = method == "neat"
+            if isinstance(initial, dict) != wants_neat:
+                initial = None
+            if method == "genetic" and getattr(settings, "brain_name", "neural") != "neural":
+                initial = None
         # A config copy with the roster's player count.
         config = SimulationConfig(
             **{**self.config.to_dict_raw(), "num_players": max(2, len(self.tributes) or self.config.num_players)}
         )
         # The map.
         scenario = Scenario(terrain=self.painter.terrain.tolist())
+        # The curriculum.
+        curriculum_object = Curriculum(curriculum) if curriculum is not None and curriculum.enabled else None
         # The trainer.
         self.training_method = method
-        # A new run: the feed starts from its first step.
         self._feed_steps_seen = 0
         self.feed_label = ""
-        # Build.
-        if method == "genetic":
-            self.trainer = GeneticTrainer(config, settings, scenario=scenario, initial_genome=initial)
-        elif method == "reinforce":
-            self.trainer = ReinforceTrainer(config, settings, scenario=scenario, initial_genome=initial)
-        else:
-            self.trainer = ImitationTrainer(config, settings, scenario=scenario, initial_genome=initial)
+        self._paused = False
+        builders = {
+            "imitation": ImitationTrainer,
+            "genetic": GeneticTrainer,
+            "neat": NeatTrainer,
+            "reinforce": ReinforceTrainer,
+            "ppo": PPOTrainer,
+        }
+        self.trainer = builders[method](
+            config, settings, scenario=scenario, initial_genome=initial, curriculum=curriculum_object
+        )
+        # How many iterations to run.
+        self._max_iterations = int(getattr(settings, "epochs", getattr(settings, "generations", 0)))
 
         # Progress callback.
         def progress(done: int, total: int) -> None:
             self.training_progress = (done, total)
 
-        # The thread body.
+        # The loop lives here so it can pause.
         def body() -> None:
             try:
-                self.trainer.run(on_progress=progress)
+                self.trainer._stop = False
+                while len(self.trainer.learning_history) < self._max_iterations and not self.trainer._stop:
+                    if self._paused:
+                        time.sleep(0.1)
+                        continue
+                    self.trainer.step(progress)
                 self.status = "Training stopped" if self.trainer._stop else "Training finished"
             except Exception as error:  # noqa: BLE001 - surface any failure in the status bar
                 self.status = f"Training error: {error}"
 
         # Start.
         self._training_thread = threading.Thread(target=body, daemon=True)
-        # Go.
         self._training_thread.start()
         # Say so.
-        self.status = f"Training ({method}{', warm start' if initial is not None else ''})..."
+        self.status = f"Training ({method}{', warm start' if initial is not None else ''}{', curriculum' if curriculum_object else ''})..."
+
+    def pause_training(self, paused: bool = True) -> None:
+        """Pause or resume the loop between iterations."""
+        # Flag.
+        self._paused = paused
+        self.status = "Training paused" if paused else "Training resumed"
+
+    @property
+    def training_paused(self) -> bool:
+        """Is the loop paused?"""
+        # Flag.
+        return self._paused
+
+    def reset_training(self) -> None:
+        """Stop and forget the trainer, its history and the feed."""
+        # Stop.
+        self.stop_training()
+        self._paused = False
+        if self._training_thread is not None:
+            self._training_thread.join(timeout=5.0)
+        # Forget.
+        self.trainer = None
+        self.training_progress = (0, 0)
+        self._feed_steps_seen = 0
+        self.feed_label = ""
+        self.status = "Training reset"
+
+    def training_events(self, count: int = 14) -> list[str]:
+        """The most recent training events."""
+        # From the trainer's log.
+        return self.trainer.events.tail(count) if self.trainer is not None else []
+
+    def learning_stats(self) -> dict:
+        """The learning statistics panel: iteration, seed, seconds per iteration, best score, total time, stage."""
+        # Nothing yet.
+        history = self.trainer.learning_history if self.trainer is not None else []
+        if not history:
+            return {
+                "iteration": 0,
+                "seed": self.config.seed,
+                "seconds_per_iteration": 0.0,
+                "max_score": 0.0,
+                "learning_time": 0.0,
+                "stage": 0,
+                "opponents": 0,
+                "mean_score": 0.0,
+                "entropy": 0.0,
+                "mean_length": 0.0,
+            }
+        last = history[-1]
+        return {
+            "iteration": last.iteration + 1,
+            "seed": getattr(self.trainer.settings, "seed", None),
+            "seconds_per_iteration": float(np.mean([s.seconds for s in history[-5:]])),
+            "max_score": float(max(s.best_score for s in history)),
+            "learning_time": last.cumulative_seconds,
+            "stage": last.stage,
+            "opponents": last.opponents,
+            "mean_score": last.mean_score,
+            "entropy": last.entropy,
+            "mean_length": last.mean_length,
+        }
+
+    def learner_ids_on_screen(self) -> set[int]:
+        """Tributes on the arena driven by a learner brain (they get a star)."""
+        # From the recording's roster when watching one, else the editable roster.
+        if self.recording is not None and self.game is None:
+            return {e.player_id for e in self.recording.roster if e.brain in self.LEARNER_KINDS}
+        return {t.player_id for t in self.tributes if t.brain_name in self.LEARNER_KINDS and t.genome is not None}
 
     def stop_training(self) -> None:
         """Ask the trainer to stop after the current generation."""
@@ -851,22 +983,33 @@ class Session:
         return list(self.trainer.history) if self.trainer is not None else []
 
     def training_rows(self) -> list[dict]:
-        """The history as plain rows."""
+        """The unified learning history as plain rows (the same shape for every method)."""
         # Empty if no trainer.
-        return self.trainer.history_rows() if self.trainer is not None else []
+        return [s.to_row() for s in self.trainer.learning_history] if self.trainer is not None else []
+
+    def latest_scores(self) -> list[float]:
+        """The scores of the newest iteration's episodes (the dashboard's score bars)."""
+        # Empty if none.
+        history = self.trainer.learning_history if self.trainer is not None else []
+        return list(history[-1].scores) if history else []
 
     def champion_genes(self) -> tuple[np.ndarray, np.ndarray] | None:
         """The latest champion genome and a mask of which genes changed since the previous champion."""
         # Need history.
         if self.trainer is None or not self.trainer.history:
             return None
-        # Latest (the GA keeps champions, the other trainers keep the policy per step).
-        if self.training_method == "genetic":
-            latest = self.trainer.history[-1].champion
-            previous = self.trainer.previous_champion()
-        else:
-            latest = self.trainer.history[-1].genome
-            previous = self.trainer.history[-2].genome if len(self.trainer.history) >= 2 else None
+
+        # The learner after each iteration (a flat array, or a NEAT genome dictionary reduced to its weights).
+        def as_vector(learner):
+            if isinstance(learner, dict):
+                return np.asarray([c[3] for c in learner["connections"]], dtype=float)
+            return np.asarray(learner, dtype=float)
+
+        history = self.trainer.learning_history
+        latest = as_vector(history[-1].learner)
+        previous = as_vector(history[-2].learner) if len(history) >= 2 else None
+        if previous is not None and previous.size != latest.size:
+            previous = None
         # Changed mask.
         changed = np.abs(latest - previous) > 1e-9 if previous is not None else np.ones(latest.size, dtype=bool)
         # Done.
@@ -930,14 +1073,20 @@ class Session:
             return 0
         # Which tributes.
         targets = [t for t in self.tributes if player_ids is None or t.player_id in player_ids]
-        # The trained brain kind (reinforce always trains the neural brain).
-        brain_name = self.trainer.training.brain_name if self.training_method == "genetic" else "neural"
+        # The trained brain kind.
+        if self.training_method == "neat":
+            brain_name = "neat"
+        elif self.training_method == "genetic":
+            brain_name = self.trainer.training.brain_name
+        else:
+            brain_name = "neural"
+        champion = self.trainer.champion
         # Give it to each.
         for spec in targets:
             # The kind.
             spec.brain_name = brain_name
-            # The genome.
-            spec.genome = self.trainer.champion.tolist()
+            # The genome (a dictionary for NEAT, a list otherwise).
+            spec.genome = champion if isinstance(champion, dict) else np.asarray(champion).tolist()
         # Neural champions need the architecture they were trained with.
         self.config.neural = self.trainer.config.neural
         # Say so.
@@ -957,14 +1106,15 @@ class Session:
         """Load a saved champion file into some tributes (all by default)."""
         # Read.
         data = GeneticTrainer.load_champion(path)
-        # Adopt the architecture.
-        self.config.neural = data["neural"]
+        # Adopt the architecture when it is a neural champion.
+        if data.get("neural") is not None:
+            self.config.neural = data["neural"]
         # Which tributes.
         targets = [t for t in self.tributes if player_ids is None or t.player_id in player_ids]
         # Give it to each.
         for spec in targets:
             spec.brain_name = data["brain_name"]
-            spec.genome = data["genome"].tolist()
+            spec.genome = data["genome"] if isinstance(data["genome"], dict) else np.asarray(data["genome"]).tolist()
         # Say so.
         self.status = f"Loaded champion into {len(targets)} tribute(s)"
         # Done.

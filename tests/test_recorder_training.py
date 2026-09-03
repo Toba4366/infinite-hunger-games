@@ -53,5 +53,5 @@ def test_trainer_handles_neural_genomes_and_padding():
     )
     trainer.run()
     assert trainer.genome_size == trainer.champion.size
-    assert (trainer.fitness > 0).all() or (trainer.fitness >= 0).all()
+    assert np.isfinite(trainer.fitness).all() and len(trainer.fitness) == 30
     assert len(trainer.population) == 30

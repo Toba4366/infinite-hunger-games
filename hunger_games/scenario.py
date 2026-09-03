@@ -33,8 +33,8 @@ class TributeSpec:
     survival_score: float
     # Which brain drives them: "voting", "random" or "neural".
     brain_name: str = "voting"
-    # A saved genome for that brain, or None for a fresh one.
-    genome: list[float] | None = None
+    # A saved genome for that brain (a list of weights, or a NEAT genome dictionary), or None for a fresh one.
+    genome: list[float] | dict | None = None
     # A weapon granted before the games (0.0 = none).
     weapon_quality: float = 0.0
     # Rations granted before the games.

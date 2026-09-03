@@ -30,6 +30,7 @@ you want to click before you read.
 | [brain/voting.md](brain/voting.md) | `brain/voting.py` | The chapter 4 voting brain |
 | [brain/random_brain.md](brain/random_brain.md) | `brain/random_brain.py` | The dice-rolling baseline |
 | [brain/neural.md](brain/neural.md) | `brain/neural.py` | The multi-layer numpy network |
+| [brain/neat.md](brain/neat.md) | `brain/neat.py` | NEAT genomes: networks whose shape evolves |
 | [player.md](player.md) | `player.py` | The body |
 | [sponsors.md](sponsors.md) | `sponsors.py` | Parachutes for favoured tributes |
 | [gamemaker.md](gamemaker.md) | `gamemaker.py` | The shrinking safe circle |
@@ -41,6 +42,9 @@ you want to click before you read.
 | [renderer.md](renderer.md) | `renderer.py` | Drawing games and exporting GIFs |
 | [analysis.md](analysis.md) | `analysis.py` | The chapter 3 charts |
 | [training/init.md](training/init.md) | `training/__init__.py` | The training package |
+| [training/common.md](training/common.md) | `training/common.py` | Shared iteration stats, events, curriculum, system monitor |
+| [training/ppo.md](training/ppo.md) | `training/ppo.py` | Proximal Policy Optimisation |
+| [training/neat.md](training/neat.md) | `training/neat.py` | The NEAT trainer with species |
 | [training/imitation.md](training/imitation.md) | `training/imitation.py` | Imitation pretraining: copying the voting brain's instincts |
 | [training/genetic.md](training/genetic.md) | `training/genetic.py` | The genetic algorithm trainer |
 | [training/reinforce.md](training/reinforce.md) | `training/reinforce.py` | REINFORCE with a value baseline |
@@ -49,6 +53,7 @@ you want to click before you read.
 | [research/telemetry.md](research/telemetry.md) | `research/telemetry.py` | Behaviour measurements during games |
 | [research/plots.md](research/plots.md) | `research/plots.py` | One PNG per chart |
 | [research/experiments.md](research/experiments.md) | `research/experiments.py` | Parameter sweeps and run folders |
+| [research/comparison.md](research/comparison.md) | `research/comparison.py` | Training methods compared, with a tournament |
 | [ui/init.md](ui/init.md) | `ui/__init__.py` | The dashboard package |
 | [ui/painter.md](ui/painter.md) | `ui/painter.py` | The paintable terrain grid |
 | [ui/session.md](ui/session.md) | `ui/session.py` | The dashboard's state |
@@ -67,6 +72,7 @@ you want to click before you read.
 | [experiments/run_ga.md](experiments/run_ga.md) | `experiments/run_ga.py` | A genetic-algorithm training run from the command line |
 | [experiments/run_rl.md](experiments/run_rl.md) | `experiments/run_rl.py` | A policy-gradient training run from the command line |
 | [experiments/run_sweep.md](experiments/run_sweep.md) | `experiments/run_sweep.py` | A parameter sweep from the command line |
+| [experiments/run_comparison.md](experiments/run_comparison.md) | `experiments/run_comparison.py` | Compare methods, sizes or initializers and run the tournament |
 
 ## Tests: `tests/`
 
@@ -83,6 +89,8 @@ you want to click before you read.
 | [tests/test_research.md](tests/test_research.md) | `test_research.py` | Gradient checks, telemetry, RL, sweeps, plots |
 | [tests/test_feed.md](tests/test_feed.md) | `test_feed.py` | Showcase recordings and the training feed |
 | [tests/test_imitation.md](tests/test_imitation.md) | `test_imitation.py` | Imitation pretraining and warm starts |
+| [tests/test_methods.md](tests/test_methods.md) | `test_methods.py` | Shared stats, NEAT, PPO, the curriculum |
+| [tests/test_comparison.md](tests/test_comparison.md) | `test_comparison.py` | The method comparison and tournament |
 
 ## Results: `output/`
 

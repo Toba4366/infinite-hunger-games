@@ -46,6 +46,9 @@ from hunger_games.research.telemetry import BehaviorTelemetry
 # Custom setups.
 from hunger_games.scenario import Scenario
 
+# Shared training pieces.
+from hunger_games.training.common import Curriculum, EventLog, IterationStats, LearnerSpec, learner_ids
+
 
 @dataclass
 class TrainingConfig:
@@ -85,6 +88,11 @@ class TrainingConfig:
     collect_telemetry: bool = True
     # Whether to record one real evaluation game per generation so the dashboard can replay training.
     record_showcase: bool = True
+    # Who each genome plays against: "voting" (the learner against the video's brain, scored by episode return)
+    # or "self" (the population plays itself, scored by placement, the original tournament style).
+    opponents: str = "voting"
+    # Learner copies per game in "voting" mode.
+    learners_per_game: int = 6
 
 
 @dataclass
@@ -232,10 +240,17 @@ class GeneticTrainer:
         training: TrainingConfig,
         scenario: Scenario | None = None,
         initial_genome: np.ndarray | None = None,
+        curriculum: Curriculum | None = None,
     ) -> None:
         """Create a random starting population, or one seeded from a genome (a warm start)."""
         # The game settings.
         self.config = config
+        # The curriculum, if any.
+        self.curriculum = curriculum
+        # Events and the unified history.
+        self.events = EventLog()
+        self.learning_history: list[IterationStats] = []
+        self.best_mean_score = -np.inf
         # The algorithm settings.
         self.training = training
         # The custom setup games are played on, if any.
@@ -414,17 +429,114 @@ class GeneticTrainer:
         return child
 
     def _learner_ids(self) -> list[int]:
-        """Which tribute slots the champion takes in validation games (a quarter of the roster, spread out)."""
-        # How many.
-        count = max(1, self.config.num_players // 4)
-        # Spread.
-        return [int(i * self.config.num_players / count) for i in range(count)]
+        """Which tribute slots a genome takes when playing against voting opponents."""
+        # Shared rule.
+        return learner_ids(self.config.num_players, self.training.learners_per_game)
+
+    def _kind(self) -> str:
+        """The learner kind for specs."""
+        # Neural or voting.
+        return "neural" if self.training.brain_name == "neural" else "voting"
+
+    def learner_spec(self) -> LearnerSpec:
+        """The current champion as a learner spec."""
+        # Champion or the first genome.
+        genome = self.champion if self.champion is not None else self.population[0]
+        return LearnerSpec(self._kind(), np.asarray(genome, dtype=float), self.config.neural)
+
+    def champion_spec(self) -> LearnerSpec:
+        """Alias of learner_spec."""
+        # Same.
+        return self.learner_spec()
+
+    def _apply_curriculum(self) -> None:
+        """Size the roster for the curriculum stage (voting mode only)."""
+        # Nothing without a curriculum or in self-play.
+        if self.curriculum is None or self.training.opponents != "voting":
+            return
+        players = min(self.training.learners_per_game, 24) + self.curriculum.opponents
+        self.config = SimulationConfig(**{**self.config.to_dict_raw(), "num_players": players})
+
+    def evaluate_against_voting(
+        self, on_progress: Callable[[int, int], None] | None = None
+    ) -> tuple[np.ndarray, list[dict], Recording | None, list[float], list[int]]:
+        """Score every genome by its mean episode return as the learner against voting opponents."""
+        # The episode player (imported here to avoid an import cycle).
+        from hunger_games.training.reinforce import _run_episode_job
+
+        learners = self._learner_ids()
+        jobs, owners = [], []
+        for index, genome in enumerate(self.population):
+            for r in range(self.training.rounds_per_generation):
+                seed = int(self.rng.integers(2**31 - 1))
+                jobs.append(
+                    (
+                        self.config,
+                        self.scenario,
+                        LearnerSpec(self._kind(), genome, self.config.neural),
+                        learners,
+                        seed,
+                        True,
+                        index == 0 and r == 0 and self.training.record_showcase,
+                    )
+                )
+                owners.append(index)
+        # Play.
+        if self.training.workers > 1 and len(jobs) > 1:
+            with ProcessPoolExecutor(max_workers=self.training.workers) as pool:
+                results = list(pool.map(_run_episode_job, jobs))
+        else:
+            results = [_run_episode_job(job) for job in jobs]
+        # Scores.
+        totals = np.zeros(len(self.population))
+        counts = np.zeros(len(self.population))
+        telemetry, lengths, wins = [], [], []
+        showcase = None
+        for job_index, result in enumerate(results):
+            outcomes = list(result["outcomes"].values())
+            totals[owners[job_index]] += float(np.mean([o["return"] for o in outcomes])) if outcomes else 0.0
+            counts[owners[job_index]] += 1
+            telemetry.append(result["telemetry"])
+            lengths += [o["survival"] for o in outcomes]
+            wins += [o["won"] for o in outcomes]
+            if result.get("recording") is not None:
+                showcase = result["recording"]
+            if on_progress is not None:
+                on_progress(job_index + 1, len(jobs))
+        self.fitness = totals / np.maximum(counts, 1)
+        self._last_telemetry = telemetry
+        self._last_showcase = showcase
+        return self.fitness, telemetry, showcase, lengths, wins
 
     def validate(self, genome: np.ndarray) -> float:
-        """Mean fitness of a genome against the config's brain on the fixed validation seeds."""
+        """Mean score of a genome against the config's brain on the fixed validation seeds."""
         # None asked for.
         if self.training.validation_games <= 0:
             return 0.0
+        # Voting mode: the same episode return the fitness uses.
+        if self.training.opponents == "voting":
+            from hunger_games.training.reinforce import _run_episode_job
+
+            learners = self._learner_ids()
+            jobs = [
+                (
+                    self.config,
+                    self.scenario,
+                    LearnerSpec(self._kind(), genome, self.config.neural),
+                    learners,
+                    self.training.validation_seed + i,
+                    True,
+                    False,
+                )
+                for i in range(self.training.validation_games)
+            ]
+            if self.training.workers > 1 and len(jobs) > 1:
+                with ProcessPoolExecutor(max_workers=self.training.workers) as pool:
+                    results = list(pool.map(_run_episode_job, jobs))
+            else:
+                results = [_run_episode_job(job) for job in jobs]
+            returns = [o["return"] for result in results for o in result["outcomes"].values()]
+            return float(np.mean(returns)) if returns else 0.0
         # Jobs.
         learners = self._learner_ids()
         arguments = [
@@ -452,8 +564,15 @@ class GeneticTrainer:
         if self._started is None:
             self._started = time.time()
         started = time.time()
-        # Score everyone.
-        fitness = self.evaluate(on_progress)
+        # Curriculum.
+        self._apply_curriculum()
+        # Score everyone: against voting opponents (the learner framing) or against each other.
+        lengths: list[float] = []
+        wins: list[int] = []
+        if self.training.opponents == "voting":
+            fitness, _, _, lengths, wins = self.evaluate_against_voting(on_progress)
+        else:
+            fitness = self.evaluate(on_progress)
         # Best first.
         ranking = np.argsort(fitness)[::-1]
         # The champion of this generation.
@@ -477,6 +596,8 @@ class GeneticTrainer:
         )
         # Keep them.
         self.history.append(stats)
+        # The unified record.
+        self._record_iteration(stats, list(fitness), lengths, wins)
         # How many elites survive unchanged.
         elite_count = max(1, int(self.training.elite_fraction * len(self.population)))
         # The elites.
@@ -513,6 +634,53 @@ class GeneticTrainer:
         """Ask a running `run()` to finish after the current generation."""
         # Set the flag; run() checks it between generations.
         self._stop = True
+
+    def _record_iteration(
+        self, stats: "GenerationStats", scores: list[float], lengths: list[float], wins: list[int]
+    ) -> None:
+        """Append the unified IterationStats, log events, and advance the curriculum."""
+        # Shape.
+        mean_score = float(np.mean(scores)) if scores else 0.0
+        record = IterationStats(
+            iteration=stats.generation,
+            scores=list(scores),
+            mean_score=mean_score,
+            best_score=float(stats.best_fitness),
+            entropy=float(stats.telemetry.get("entropy", 0.0)) if stats.telemetry else 0.0,
+            mean_length=float(np.mean(lengths))
+            if lengths
+            else (float(stats.telemetry.get("mean_survival_ticks", 0.0)) if stats.telemetry else 0.0),
+            win_rate=float(np.mean(wins))
+            if wins
+            else (float(stats.telemetry.get("win_rate", 0.0)) if stats.telemetry else 0.0),
+            val_score=float(stats.val_fitness),
+            seconds=stats.seconds,
+            cumulative_seconds=stats.cumulative_seconds,
+            stage=self.curriculum.stage if self.curriculum else 0,
+            opponents=self.curriculum.opponents if self.curriculum else self.config.num_players - 1,
+            extra={"worst_fitness": stats.worst_fitness},
+            learner=stats.champion,
+            telemetry=stats.telemetry,
+            showcase=stats.showcase,
+        )
+        self.learning_history.append(record)
+        self.events.add(
+            "evolution",
+            f"generation {stats.generation}: best {stats.best_fitness:.2f}, mean {mean_score:.2f}, validation {stats.val_fitness:.2f}",
+        )
+        if stats.best_fitness > self.best_mean_score:
+            self.best_mean_score = stats.best_fitness
+            self.events.add("record", f"new best fitness {stats.best_fitness:.2f}")
+        if self.curriculum is not None and self.curriculum.observe(mean_score):
+            self.events.add(
+                "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
+            )
+
+    def step(self, on_progress: Callable[[int, int], None] | None = None) -> IterationStats:
+        """One generation in the shared shape."""
+        # Run and hand back the unified record.
+        self.step_generation(on_progress)
+        return self.learning_history[-1]
 
     def history_rows(self) -> list[dict]:
         """The history as JSON-friendly rows (no genomes or telemetry)."""
@@ -570,9 +738,11 @@ class GeneticTrainer:
         """Read a champion file back: a dict with brain_name, neural, genome (as numpy), fitness."""
         # Parse.
         data = json.loads(Path(path).read_text())
-        # Restore the genome as an array.
-        data["genome"] = np.asarray(data["genome"], dtype=float)
-        # Restore the neural config.
-        data["neural"] = NeuralConfig(**{**data["neural"], "hidden_layers": tuple(data["neural"]["hidden_layers"])})
+        # Restore the genome as an array (a NEAT genome stays a dictionary).
+        if not isinstance(data["genome"], dict):
+            data["genome"] = np.asarray(data["genome"], dtype=float)
+        # Restore the neural config when present.
+        if data.get("neural") is not None:
+            data["neural"] = NeuralConfig(**{**data["neural"], "hidden_layers": tuple(data["neural"]["hidden_layers"])})
         # Done.
         return data

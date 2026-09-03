@@ -65,6 +65,82 @@ class NetworkVisualizer:
         if dpg.does_item_exist(self.tag):
             dpg.configure_item(self.tag, width=self.width, height=self.height)
 
+    def _render_graph(self, data: dict) -> None:
+        """Draw a NEAT genome: columns by depth, nodes coloured by value, edges by weight."""
+        # Nodes and edges.
+        nodes = data["nodes"]
+        edges = data["edges"]
+        # Columns by depth.
+        max_depth = max((d for _, _, d, _ in nodes), default=1)
+        # Outputs go in the last column regardless of depth.
+        column_of = {}
+        for node_id, kind, depth, _ in nodes:
+            column_of[node_id] = (
+                0 if kind in ("input", "bias") else (max_depth + 1 if kind == "output" else max(1, depth))
+            )
+        columns = max(column_of.values(), default=1) + 1
+        left, right = 150, self.width - 120
+        xs = [left + (right - left) * i / max(1, columns - 1) for i in range(columns)]
+        # Rows within each column.
+        per_column: dict[int, list] = {}
+        for node_id, kind, _depth, value in nodes:
+            per_column.setdefault(column_of[node_id], []).append((node_id, kind, value))
+        positions = {}
+        for column, members in per_column.items():
+            spacing = (self.height - 40) / max(1, len(members))
+            for i, (node_id, _kind, _value) in enumerate(members):
+                positions[node_id] = (xs[column], 20 + spacing * (i + 0.5))
+        radius = max(2.5, min(7.0, (self.height - 40) / max(len(m) for m in per_column.values()) / 2.5))
+        # Edges.
+        top = max((abs(w) for _, _, w in edges), default=1.0) or 1.0
+        for src, dst, weight in edges:
+            if src in positions and dst in positions:
+                alpha = int(30 + 200 * abs(weight) / top)
+                color = (230, 120, 90, alpha) if weight > 0 else (90, 140, 230, alpha)
+                dpg.draw_line(positions[src], positions[dst], color=color, thickness=1.0, parent=self.layer)
+        # Nodes.
+        for node_id, _kind, _depth, value in nodes:
+            dpg.draw_circle(
+                positions[node_id],
+                radius,
+                color=(20, 20, 20, 255),
+                fill=activation_color(value),
+                thickness=0.8,
+                parent=self.layer,
+            )
+        # Input labels.
+        inputs = [n for n in nodes if n[1] == "input"]
+        if len(inputs) == len(VECTOR_NAMES):
+            for (node_id, _, _, _), name in zip(inputs, VECTOR_NAMES, strict=False):
+                dpg.draw_text(
+                    (positions[node_id][0] - 145, positions[node_id][1] - 6),
+                    name,
+                    color=(190, 190, 190, 255),
+                    size=10,
+                    parent=self.layer,
+                )
+        # Output labels with probabilities.
+        outputs = [n for n in nodes if n[1] == "output"]
+        probabilities = np.asarray(data["probabilities"])
+        for i, ((node_id, _, _, _), name) in enumerate(zip(outputs, data["menu"], strict=False)):
+            chosen = i == data.get("chosen", -1)
+            dpg.draw_text(
+                (positions[node_id][0] + 12, positions[node_id][1] - 6),
+                f"{name} {probabilities[i] * 100:4.0f}%",
+                color=(255, 230, 0, 255) if chosen else (200, 200, 200, 255),
+                size=11,
+                parent=self.layer,
+            )
+        # Caption.
+        hidden = sum(1 for n in nodes if n[1] == "hidden")
+        dpg.draw_text(
+            (xs[0] - 20, 2),
+            f"NEAT: {len(inputs)} inputs, {hidden} hidden, {len(outputs)} outputs, {len(edges)} connections",
+            color=(150, 150, 150, 255),
+            size=11,
+            parent=self.layer,
+        )
+
     def render(self, snapshot: dict | None, architecture: list[int] | None = None) -> None:
         """Draw a snapshot, or an empty architecture diagram if there is no live tribute."""
         # Clear.
@@ -74,6 +150,10 @@ class NetworkVisualizer:
             self.last = snapshot
         # What to draw.
         data = self.last
+        # A NEAT graph has its own drawing.
+        if data is not None and data.get("graph"):
+            self._render_graph(data)
+            return
         # Nothing at all: draw the bare architecture.
         if data is None:
             # Need sizes.

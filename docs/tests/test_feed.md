@@ -1,17 +1,17 @@
 # `test_feed.py`
 
 **Source:** [tests/test_feed.py](../../tests/test_feed.py)
-**Tests:** [../training/genetic.md](../training/genetic.md) (`GeneticTrainer`, `TrainingConfig`, `GenerationStats.showcase`), [../training/reinforce.md](../training/reinforce.md) (`ReinforceTrainer`, `RLConfig`, `EpochStats.showcase`), [../ui/session.md](../ui/session.md) (`Session.feed_mode`, `update`, `_advance_feed`, `load_recording`, `start_champion_game`, `network_evolution`), and through them [../recorder.md](../recorder.md) (`Recorder`, `Recording`), [../game.md](../game.md), [../config.md](../config.md) (`SimulationConfig`)
+**Tests:** [../training/genetic.md](../training/genetic.md) (`GeneticTrainer`, `TrainingConfig`, `GenerationStats.showcase`), [../training/reinforce.md](../training/reinforce.md) (`ReinforceTrainer`, `RLConfig`, `EpochStats.showcase`, `play_rl_episode`), [../ui/session.md](../ui/session.md) (`Session.feed_mode`, `update`, `_advance_feed`, `load_recording`, `start_champion_game`, `network_evolution`), and through them [../recorder.md](../recorder.md) (`Recorder`, `Recording`), [../game.md](../game.md), [../config.md](../config.md) (`SimulationConfig`)
 
 ## Purpose
 
-The dashboard has a training feed. While a trainer runs in the background, the feed can show what training looks like instead of a table of numbers. It has three modes. `"off"` shows nothing. `"replay"` loads the real evaluation game that each generation (or epoch) recorded and plays it back. `"live"` hands the newest champion to the trainer's learner slots and starts a fresh game so the Network tab shows real activations.
+The dashboard has a training feed. While a trainer runs in the background, the feed can show what training looks like instead of a table of numbers. It has three modes. `"off"` shows nothing. `"replay"` loads the real training game that each generation (or epoch) recorded and plays it back. `"live"` hands the newest champion to the trainer's learner slots and starts a fresh game so the Network tab shows real activations.
 
 For the replay mode to work, both trainers must record one game per training step. That is the `record_showcase` switch on `TrainingConfig` and `RLConfig`, and the `showcase` field on `GenerationStats` and `EpochStats`. For the live mode to work, the session has to notice that a new step has arrived, wait until the arena is free, and then start the champion game.
 
 This file checks all of that. The first test proves the genetic trainer records a full game every generation, keeps it out of the JSON rows, and records nothing when the switch is off. The second proves the REINFORCE trainer records its first training game each epoch, with the result filled in. The third drives a whole feed cycle through a `Session`: train in a thread, let the feed replay the newest generation, pretend to watch it to the end, switch to live, and check that a champion game starts and that the Network tab's evolution chart has data.
 
-None of this needs a window. `Session` has no GUI code in it, so the test runs in CI in a few seconds.
+None of this needs a window. `Session` has no GUI code in it, so the test runs in CI in under ten seconds.
 
 ## Concepts you need
 
@@ -20,6 +20,8 @@ None of this needs a window. `Session` has no GUI code in it, so the test runs i
 **Polling a thread.** `Session.start_training` runs the trainer in a daemon thread. The third test waits with `while session.training_running: time.sleep(0.05)`, checking every 50 milliseconds. This is the same thing the dashboard does every frame, rather than the `join` that `test_ui_session.py` uses.
 
 **Recordings.** `Recorder(game).record_all()` plays a game to the end and returns a `Recording` with one `Frame` per tick, starting with tick 0. `recording.length` is the frame count and `recording.result` is the `GameResult`, filled in when the game ends. A recording of a game that ran at least one tick has `length > 1`.
+
+**Learner slots.** Both trainers put the learner into a few tribute slots and fill the rest with the config's voting brain. `learner_ids(num_players, learners)` spreads the slots evenly: `[0, 4, 8, 12, 16, 20]` for six learners in 24, `[0, 6, 12, 18]` for four. The genetic trainer plays one such game per genome per round and scores the genome by its copies' mean episode return.
 
 **`all(...)` with a generator.** `all(stats.showcase is not None and stats.showcase.length > 1 for stats in trainer.history)` checks every generation without building a list, and stops at the first failure.
 
@@ -40,17 +42,17 @@ def small() -> SimulationConfig:
     return SimulationConfig(seed=3, width=40, height=40, max_days=3)
 ```
 
-A 40 by 40 arena capped at 3 days, which is 72 ticks at the default 24 ticks per day. The player count stays at the default 24. Games this size finish in a few hundredths of a second, so several of them per test stay fast. Seed 3 fixes the arena; the trainers draw their own game seeds from their own generators.
+A 40 by 40 arena capped at 3 days, which is 72 ticks at the default 24 ticks per day. The player count stays at the default 24. Games this size finish in a few hundredths of a second, so a few dozen of them per test stay fast. Seed 3 fixes the arena; the trainers draw their own game seeds from their own generators.
 
 ### `test_genetic_trainer_records_one_showcase_game_per_generation()`
 
-**Setup.** `GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=0, seed=0))`. The population equals the player count and there is one round, so `_make_jobs` makes exactly one job per generation. That job has index 0, and `record_showcase` defaults to `True`, so it is played with `record=True`. `validation_games=0` skips the validation games to keep the test quick. `trainer.run()` plays both generations.
+**Setup.** `GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=0, seed=0))`. `opponents` keeps its default `"voting"`, so each generation `evaluate_against_voting` plays one game per genome: 24 games, each with the genome's six copies against 18 voting tributes. The record flag for a job is `index == 0 and r == 0 and self.training.record_showcase`, so only genome 0's first-round game is recorded, and `record_showcase` defaults to `True`. `validation_games=0` skips the validation games to keep the test quick. `trainer.run()` plays both generations, 48 games in about 5 seconds.
 
-**`assert all(stats.showcase is not None and stats.showcase.length > 1 for stats in trainer.history)`.** Both `GenerationStats` carry a `Recording`, and each has more than one frame: frame 0 plus at least one tick. A failure would mean `evaluate` forgot to pass the record flag, `absorb` dropped the recording, or `step_generation` did not put `_last_showcase` into the stats.
+**`assert all(stats.showcase is not None and stats.showcase.length > 1 for stats in trainer.history)`.** Both `GenerationStats` carry a `Recording`, and each has more than one frame: frame 0 plus at least one tick. A failure would mean `evaluate_against_voting` forgot to pass the record flag, dropped the `"recording"` entry of the first job's result, or `step_generation` did not put `_last_showcase` into the stats.
 
 **`assert "showcase" not in trainer.history_rows()[0]`.** `to_row()` walks `__dict__` and skips `champion`, `telemetry` and `showcase`. If the recording leaked into a row, `history.json` would fail to serialise, because a `Recording` is not JSON. This line catches that before `save_run` does.
 
-**The quiet trainer.** A second `GeneticTrainer` with the same settings, `generations=1`, and `record_showcase=False`. After `quiet.run()`, `assert quiet.history[0].showcase is None`. The record flag for job 0 is `job_index == 0 and self.training.record_showcase`, which is `False` here, so `play_evaluation_game` takes the plain `game.run()` path and returns `None` as its third value. This is the off switch that a long headless run needs, because every recording otherwise stays in memory until the trainer is dropped.
+**The quiet trainer.** A second `GeneticTrainer` with the same settings, `generations=1`, and `record_showcase=False`. After `quiet.run()`, `assert quiet.history[0].showcase is None`. With the flag off, every job's record flag is `False`, so `play_rl_episode` skips the `Recorder` and returns `"recording": None` for every game, and `_last_showcase` stays `None`. This is the off switch that a long headless run needs, because every recording otherwise stays in memory until the trainer is dropped.
 
 ### `test_reinforce_trainer_records_one_showcase_game_per_epoch()`
 
@@ -62,11 +64,11 @@ A 40 by 40 arena capped at 3 days, which is 72 ticks at the default 24 ticks per
 
 ### `test_session_feed_replays_and_then_plays_the_champion_live()`
 
-**Setup.** `Session(small())` builds a Perlin arena into the painter and a 24-tribute roster. `session.feed_mode = "replay"` turns the feed on before training starts. `session.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=0, seed=0))` builds a `GeneticTrainer` on the painted map and starts it in a daemon thread. The default `method` is `"genetic"`. Same settings as the first test, so every generation records its one evaluation game.
+**Setup.** `Session(small())` builds a Perlin arena into the painter and a 24-tribute roster. `session.feed_mode = "replay"` turns the feed on before training starts. `session.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=0, seed=0))` builds a `GeneticTrainer` on the painted map (a config copy with the roster's 24 players, and `Scenario(terrain=...)`), resets `_feed_steps_seen` and `feed_label`, and starts a daemon thread. The default `method` is `"genetic"`. The thread runs the session's own loop: `trainer.step(progress)` until `learning_history` has `generations` entries or `stop()` was called. Same settings as the first test, so every generation records genome 0's game.
 
-**`while session.training_running: time.sleep(0.05)`.** Poll until the thread ends. Two generations of one game each take well under a second.
+**`while session.training_running: time.sleep(0.05)`.** Poll until the thread ends. Two generations of 24 games each take about 3 seconds.
 
-**`session.update(0.01)`.** One UI frame of 10 milliseconds. `update` first calls `_advance_feed`. The feed is on, the trainer exists, and `len(history)` is 2 while `_feed_steps_seen` is 0, so there is something new. `_feed_ready_for_next()` returns `True` because nothing is loaded. The feed catches up (`_feed_steps_seen = 2`), takes `history[-1].showcase` (generation 1's game) and calls `load_recording` on it, which adopts the recording, drops any live game, loads the recording's terrain into the painter, adopts its config, rebuilds the roster from the recording, and rewinds. Then `feed_label` becomes `"training feed: replaying a real generation 1 game"` and `playing` is set to `True`. Back in `update`, `playing` is now `True`, but 0.01 seconds at the default 8 ticks per second is 0.08 of a tick, so the playhead does not move.
+**`session.update(0.01)`.** One UI frame of 10 milliseconds. `update` first calls `_advance_feed`. The feed is on, the trainer exists, and `len(trainer.history)` is 2 while `_feed_steps_seen` is 0, so there is something new. `_feed_ready_for_next()` returns `True` because nothing is loaded. The feed catches up (`_feed_steps_seen = 2`), takes `history[-1].showcase` (generation 1's game) and calls `load_recording` on it, which adopts the recording, drops any live game, loads the recording's terrain into the painter, adopts its config, rebuilds the roster from the recording, and rewinds. Then `feed_label` becomes `"training feed: replaying a real generation 1 game"` and `playing` is set to `True`. Back in `update`, `playing` is now `True`, but 0.01 seconds at the default 8 ticks per second is 0.08 of a tick, so the playhead does not move.
 
 **`assert session.game is None and session.recording is not None`.** A replay: a recording to scrub through but no live `Game`. This is how the session tells a replay from a live game everywhere else.
 
@@ -78,11 +80,11 @@ A 40 by 40 arena capped at 3 days, which is 72 ticks at the default 24 ticks per
 
 **`session.feed_mode = "live"` and `session._feed_steps_seen = 0`.** Switch modes and forget that generation 1 was already shown. Without the reset, `len(history) <= _feed_steps_seen` would be true and the feed would wait for a generation that is never coming, because training has finished.
 
-**`session.update(0.01)`.** `_advance_feed` again. Something is "new" (2 steps, 0 seen) and the arena is free (replay at its last frame). The live branch calls `start_champion_game(all_slots=False)`. That gives the champion genome to the trainer's `_learner_ids()` slots, `[0, 4, 8, 12, 16, 20]` for 24 players, through `give_champion`, then calls `new_game()` to build a fresh recorded `Game` on the painted map, and sets `playing`. The label becomes `"training feed: generation 1 champion playing live"`.
+**`session.update(0.01)`.** `_advance_feed` again. Something is "new" (2 steps, 0 seen) and the arena is free (replay at its last frame). The live branch calls `start_champion_game(all_slots=False)`. That gives the champion genome to the trainer's `_learner_ids()` slots, `[0, 4, 8, 12, 16, 20]` for six learners in 24 players, through `give_champion`, then calls `new_game()` to build a fresh recorded `Game` on the painted map, and sets `playing`. The label becomes `"training feed: generation 1 champion playing live"`.
 
 **`assert session.game is not None and "live" in session.feed_label`.** There is a live game now, and the label says so.
 
-**`evolution = session.network_evolution()`.** Stacks every champion genome in the trainer's history into a matrix and reports how it changed. For a genetic trainer, `genome_history()` is `[stats.champion for stats in history]`.
+**`evolution = session.network_evolution()`.** Stacks the learner after every training step into a matrix and reports how it changed. `genome_history()` reads `stats.learner` from each entry of the trainer's `learning_history`; for a genetic trainer that is the generation's champion.
 
 **`assert evolution is not None and len(evolution["steps"]) == 2 and evolution["genes"].shape[0] == 2`.** Two generations give two steps and a two-row matrix. The voting brain has 8 genes, so `genes` is 2 by 8, well under the `max_genes` cap of 200.
 
@@ -179,13 +181,13 @@ def test_session_feed_with_reinforce():
 
 **The reset of `_feed_steps_seen` is a test trick.** In the dashboard, switching to live mode while training is still running picks up the next generation naturally. The test resets the counter because training has already finished and there will be no next generation.
 
-**`load_recording` rewrites the session.** It replaces `session.config` with the recording's config, reloads the painter from the recording's terrain, and rebuilds the roster from the recording's roster. After the replay step, the session's config is the trainer's copy of it, with `num_players` set from the roster and `seed` set to whatever random seed that evaluation game drew. The live champion game is then built from that config and the rebuilt roster.
+**`load_recording` rewrites the session.** It replaces `session.config` with the recording's config, reloads the painter from the recording's terrain, and rebuilds the roster from the recording's roster. After the replay step, the session's config is the trainer's copy of it, with `num_players` set from the roster and `seed` set to whatever random seed that training game drew. The live champion game is then built from that config and the rebuilt roster.
 
-**`start_champion_game(all_slots=False)` reaches into the trainer.** It calls `trainer._learner_ids()`, a private method, to find the learner slots. Both trainers have one, but they compute different slots: a quarter of the roster for the genetic trainer, `learners_per_game` slots for REINFORCE.
+**`start_champion_game(all_slots=False)` reaches into the trainer.** It calls `trainer._learner_ids()`, a private method, to find the learner slots. Every trainer has one, and they all use the shared `learner_ids` rule with their own `learners_per_game`: 6 by default for both the genetic and the REINFORCE trainer, 4 in this file's RL test.
 
 **Showcases are big.** Every step's recording stays in `trainer.history` for the life of the trainer. The tests run one or two steps on a 40 by 40 map, which is nothing. A long run on a big map should set `record_showcase=False` unless the feed is being watched.
 
-**Only the first game of a step is recorded.** With one job per generation, as in these tests, that is the only game. With the default 4 jobs per generation, the other three are never recorded, and the champion of the generation is not guaranteed to be in the recorded one.
+**Only the first game of a step is recorded.** The genetic trainer plays one game per genome per round and records only genome 0's first game, so with 24 genomes the other 23 games are never recorded and the champion of the generation is usually not in the recorded one. The REINFORCE trainer records the first of its `episodes_per_epoch` games.
 
 **`showcase.length > 1` needs at least one tick.** A game that was over at tick 0 would give a recording of length 1 with `result` filled in. That cannot happen with 24 living tributes, but if you shrink the test to two players and a lethal start, the first assertion is the one that would fail.
 

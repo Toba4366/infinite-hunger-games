@@ -32,8 +32,8 @@ proving what they learned.
 ## Install and check
 
 ```bash
-pip install -r requirements.txt      # numpy, matplotlib, pandas, pillow, dearpygui, pytest
-python -m pytest tests               # 50 tests, about twenty seconds
+pip install -r requirements.txt      # numpy, matplotlib, pandas, pillow, dearpygui, psutil, pytest
+python -m pytest tests               # 56 tests, about a minute
 ruff format --check . && ruff check .   # the code is formatted and lint-clean (config in pyproject.toml)
 ```
 
@@ -58,7 +58,7 @@ the world regenerate the arena at once.
 | Tributes | Podium presets (edge ring, around cornucopia, random, two sides) or drag tributes. Rename, change district, sex, scores, brain, grant a weapon, food, medkits or sponsor favour, set starting bars. |
 | Brains | Default brain, and the neural network: the number of hidden layers, the nodes in each, activation, every initializer, with the 50 inputs and 16 outputs listed. |
 | Play | Speed presets, back-to-back games, replays, GIF export. |
-| Train | Imitation pretraining (copy the voting brain's instincts), genetic algorithm or REINFORCE, warm starts from the current champion, the reward function, live performance, stability and timing plots, the champion's genes with the changed ones highlighted, a training feed that replays a real evaluation game from every step or lets the newest champion play live, watch the champion, save the run folder. |
+| Train | One network trained against the voting brain, marked with a gold star on the arena. Five methods with one-line help: imitation, genetic, NEAT, REINFORCE, PPO. Warm starts, an opponent curriculum (1, 3, 7, 11, 23), and a dashboard modelled on the zombie video: latest-score bars, an event monitor, average score, entropy and game-length graphs, learning statistics with a rollout bar, CPU and memory, Start, Pause, Stop, Reset and Watch agent, plus a training feed that replays a real training game every iteration or lets the newest learner play live. |
 | Research | Parameter sweeps over any setting, and one-PNG-per-chart exports of the behaviour of every game watched. |
 
 The right panel's Network tab draws the selected neural tribute's network as
@@ -97,11 +97,23 @@ Headless: prefix commands with `MPLBACKEND=Agg`.
 ## Research scripts and run folders
 
 ```bash
+python experiments/run_comparison.py --iterations 20 --games 75 --workers 4              # all five methods, then the tournament
+python experiments/run_comparison.py --methods imitation,ppo --warm --curriculum --iterations 30
+python experiments/run_comparison.py --methods ppo --sizes 16,64x32,128x64                # network sizes
+python experiments/run_comparison.py --methods ppo --initializers xavier_uniform,he_uniform,zeros
 python experiments/run_ga.py --brain neural --population 48 --generations 20 --workers 4
 python experiments/run_rl.py --epochs 30 --episodes 4 --learners 6 --workers 4
 python experiments/run_sweep.py --parameter chaos --values 0,0.25,0.5,0.75,1 --games 50 --workers 4
-python experiments/run_sweep.py --parameter terrain.water_threshold --values 0.1,0.25,0.4
 ```
+
+The comparison trains every variant under the same budget, then every
+champion plays the same 75 seeded games against voting opponents. Its folder
+holds `results.csv`, a LaTeX table, overlaid learning curves against
+iterations and against wall-clock time, tournament charts, lines-of-code
+and training-time charts, each variant's own run folder, and a generated
+`report.md` that ranks the methods and states which is simplest and which
+trained fastest. The [research guide](docs/research/README.md) explains how
+to turn that into an answer.
 
 Each writes `results/<name>_<timestamp>/` containing `config.json`,
 `history.json` (or `results.csv` and `summary.json` for a sweep),
@@ -240,7 +252,21 @@ caution 0.5, urgency power 2.0; a need below 0.2 casts 20 extra votes
 | `placement` | 2.0 | Scaled by placing at the end: full for first, nothing for last. |
 | `discount` | 0.98 | How much a reward one tick later is worth now. |
 
-### Trainers
+### Training methods
+
+| Method | What changes each iteration | Needs a teacher | Gradients | Evolves structure | Source |
+| --- | --- | --- | --- | --- | --- |
+| imitation | The network copies the voting brain's decisions (cross-entropy). | yes | yes | no | this project |
+| genetic | A population's weights, by selection, crossover and mutation. | no | no | no | classic neuroevolution |
+| neat | Weights and the network's shape, in species. | no | no | yes | the Monopoly video |
+| reinforce | Weights, by policy gradient with a value baseline. | no | yes | no | Williams 1992 |
+| ppo | Weights, by a clipped policy gradient with several passes per batch. | no | yes | no | the zombie video |
+
+Every method trains one learner network against voting opponents and
+reports the same per-iteration statistics, so they can be compared on one
+chart. All five accept a warm start and the opponent curriculum.
+
+### Trainer defaults
 
 | Setting | Imitation (`ImitationConfig`) | Genetic (`TrainingConfig`) | REINFORCE (`RLConfig`) |
 | --- | --- | --- | --- |
@@ -249,6 +275,8 @@ caution 0.5, urgency power 2.0; a need below 0.2 casts 20 extra votes
 | Validation | held-out 20% of decisions, plus 1 greedy game on a fixed seed | champion versus the default brain on 2 fixed seeds | greedy policy on 2 fixed seeds |
 | Logged per step | train and validation loss and accuracy, validation survival and win rate, seconds, telemetry | best, mean, worst and validation fitness, seconds, telemetry | policy and value loss, entropy, train and validation return, survival, win and kill rate, seconds, telemetry |
 | Warm start | from a champion, optional | population seeded with the champion and close relatives | policy starts from the champion |
+
+NEAT (`NeatTrainerConfig`): population 48, 30 generations, 6 learner copies per game, target 8 species, add-node 0.03, add-connection 0.08, stagnation 15. PPO (`PPOConfig`): REINFORCE's settings plus clip 0.2, 4 passes per batch, minibatch 256, GAE lambda 0.95. Curriculum (`CurriculumConfig`): opponents 1, 3, 7, 11, 23, promoted when the last 5 iterations average a score of 3 or after 40 iterations.
 
 Why imitation comes first: a fresh network chooses "drink" one time in
 sixteen even while standing in water, so every untrained tribute dies of
@@ -278,14 +306,14 @@ twice as long and dehydration falls to 2 of 12.
 hunger_games/
   config.py, noise.py, terrain.py, districts.py, resources.py, arena.py
   actions.py, perception.py (50-value vector, VECTOR_NAMES)
-  brain/  base.py, initializers.py, mlp.py (backprop, Adam), voting.py, random_brain.py, neural.py
+  brain/  base.py, initializers.py, mlp.py (backprop, Adam), voting.py, random_brain.py, neural.py, neat.py
   player.py, sponsors.py, gamemaker.py, scenario.py, records.py
   game.py (decision and tick hooks), recorder.py, runner.py, renderer.py, analysis.py
-  training/  imitation.py, genetic.py, reinforce.py, runs.py
-  research/  telemetry.py, plots.py, experiments.py
+  training/  common.py, imitation.py, genetic.py, neat.py, reinforce.py, ppo.py, runs.py
+  research/  telemetry.py, plots.py, experiments.py, comparison.py
   ui/  painter.py, session.py, canvas.py, visualizer.py, app.py, screenshots.py
   __main__.py
-experiments/  run_ga.py, run_rl.py, run_sweep.py
+experiments/  run_comparison.py, run_ga.py, run_rl.py, run_sweep.py
 tests/        44 tests
 docs/         one page per file, plus tutorial/, ui/README.md and research/README.md
 output/       dataset, plots/, snapshots, GIF

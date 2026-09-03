@@ -48,7 +48,14 @@ from hunger_games.resources import ResourceKind, weapon_name
 from hunger_games.terrain import TerrainType
 
 # Training settings.
-from hunger_games.training import ImitationConfig, RLConfig, TrainingConfig
+from hunger_games.training import (
+    CurriculumConfig,
+    ImitationConfig,
+    NeatTrainerConfig,
+    PPOConfig,
+    RLConfig,
+    TrainingConfig,
+)
 
 # The canvas.
 from hunger_games.ui.canvas import ArenaCanvas
@@ -143,8 +150,16 @@ class Dashboard:
         self.rl = RLConfig()
         # Imitation settings.
         self.imitation = ImitationConfig()
+        # NEAT settings.
+        self.neat = NeatTrainerConfig()
+        # PPO settings.
+        self.ppo = PPOConfig()
+        # Curriculum settings.
+        self.curriculum = CurriculumConfig(enabled=False)
         # Which method the Train tab uses.
-        self.method = "genetic"
+        self.method = "imitation"
+        # How many events the monitor showed last time.
+        self._events_shown = 0
         # A brush ring to draw when the mouse is not over the arena (used by the screenshot tool).
         self.brush_demo: tuple[int, int, int] | None = None
 
@@ -426,11 +441,11 @@ class Dashboard:
         ),
         (
             "7. Train and watch training",
-            "For a neural brain start with 'imitation': it copies the voting brain's decisions so the network has "
-            "instincts instead of dying of thirst on day three. Then keep 'start from the current champion' ticked and "
-            "pick 'genetic' (small mutation scale) or 'reinforce'. Set the training feed to 'replay' to watch a real "
-            "evaluation game from every step, or 'live' to watch the newest champion play with real activations. "
-            "Show me starts a short evolution of voting brains.",
+            "One network is trained; it plays the starred tributes against voting opponents. Start with 'imitation' "
+            "so it copies the voting brain's instincts, then keep 'start from the current champion' ticked and pick "
+            "'ppo', 'reinforce', 'genetic' or 'neat'. Turn on the curriculum to face 1, 3, 7, 11 then 23 opponents. "
+            "The feed replays a real training game after every iteration, or lets the newest learner play live. "
+            "Show me starts a short imitation run with the live feed.",
             "train",
         ),
         (
@@ -500,17 +515,15 @@ class Dashboard:
             dpg.set_value("left_tabs", "tab_brains")
         # Train.
         elif name == "train":
-            # A short, fixed evolution of voting brains; the Train tab's own settings are left alone.
-            dpg.set_value("train_method", "genetic")
-            self._on_method(None, "genetic")
+            # A short imitation run with the feed live; the Train tab's own settings are left alone.
+            dpg.set_value("train_method", "imitation")
+            self._on_method(None, "imitation")
             self.session.feed_mode = "live"
             dpg.set_value("feed_mode", "live")
             self._plotted_steps = -1
+            self._events_shown = 0
             self.session.start_training(
-                TrainingConfig(
-                    brain_name="voting", population_size=24, generations=5, rounds_per_generation=1, validation_games=1
-                ),
-                "genetic",
+                ImitationConfig(demonstration_games=2, epochs=4, validation_games=1, learners_per_game=6), "imitation"
             )
             dpg.set_value("left_tabs", "tab_train")
         # Research.
@@ -1305,27 +1318,138 @@ class Dashboard:
 
     # ------------------------------------------------------------- train
 
+    # The methods offered, in the order a learner should try them.
+    METHODS = ("imitation", "genetic", "neat", "reinforce", "ppo")
+    # One-line explanations shown under the method combo.
+    METHOD_HELP = {
+        "imitation": "Copies the voting brain's decisions (supervised). Start here: it gives the network instincts.",
+        "genetic": "Evolves the weights of a population of networks; each plays as the learner against voting opponents.",
+        "neat": "Evolves weights and the shape of the network, in species (the Monopoly video's method).",
+        "reinforce": "Policy gradient with a value baseline: every action is scored by the reward function.",
+        "ppo": "Clipped policy gradient with several passes per batch (the zombie video's method). The most stable reward method.",
+    }
+
     def _build_train(self) -> None:
-        """Genetic-algorithm and policy-gradient training."""
+        """The training dashboard: one learner network against voting opponents."""
+        # What is being trained.
+        dpg.add_text(
+            "One network is trained. It plays the starred tributes; every other tribute uses the voting brain.",
+            wrap=360,
+            color=(160, 160, 170),
+        )
         # Method.
-        dpg.add_radio_button(
-            ["imitation", "genetic", "reinforce"],
-            default_value=self.method,
-            horizontal=True,
-            callback=self._on_method,
-            tag="train_method",
+        dpg.add_combo(
+            list(self.METHODS), label="method", default_value=self.method, callback=self._on_method, tag="train_method"
         )
-        self._tip(
-            "genetic: evolve a population of genomes by playing them against each other (works for neural and voting brains). reinforce: policy gradient with a value baseline, rewarding every action (neural only)."
-        )
-        # GA settings.
-        # Warm start.
+        dpg.add_text(self.METHOD_HELP[self.method], tag="method_help", wrap=360, color=(160, 160, 170))
+        # Options.
         dpg.add_checkbox(label="start from the current champion", default_value=True, tag="warm_start")
         self._tip(
-            "Seeds the next run with the champion of the last one (or a loaded champion file). Pretrain by imitation, then keep this ticked and evolve or reinforce from that network. For the genetic method use a small mutation scale (about 0.02) so the instincts survive."
+            "Seeds the run with the last champion (or a loaded champion file). Pretrain by imitation, then evolve or reinforce from it."
         )
-        # Imitation settings.
-        with dpg.group(tag="im_group", show=False):
+        dpg.add_checkbox(
+            label="curriculum: opponents grow 1, 3, 7, 11, 23",
+            default_value=False,
+            tag="curriculum_on",
+            callback=lambda s, a: setattr(self.curriculum, "enabled", a),
+        )
+        self._tip(
+            "Like the zombie video's one-to-sixteen ladder: the learner faces few opponents first and is promoted when its recent mean score clears the threshold, or after 40 iterations."
+        )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Training feed")
+            dpg.add_radio_button(
+                list(Session.FEED_MODES),
+                default_value=self.session.feed_mode,
+                horizontal=True,
+                callback=lambda s, a: setattr(self.session, "feed_mode", a),
+                tag="feed_mode",
+            )
+        self._tip(
+            "replay: after every iteration the arena replays one real training game. live: the newest learner plays a fresh game live (stars mark it) so the Network tab shows real activations."
+        )
+        # Controls.
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Start", callback=self._on_start_training, tag="train_start")
+            dpg.add_button(label="Pause", callback=self._on_pause_training, tag="train_pause")
+            dpg.add_button(label="Stop", callback=self.session.stop_training)
+            dpg.add_button(label="Reset", callback=self._on_reset_training)
+            dpg.add_button(label="Watch agent", callback=self._on_watch_champion)
+        self._tip(
+            "Start begins a run with the settings below. Pause holds it between iterations. Stop ends it after the current one. Reset forgets it. Watch agent gives the champion to the starred tributes and plays a game live."
+        )
+        dpg.add_progress_bar(default_value=0.0, overlay="", tag="train_progress", width=-1)
+        dpg.add_text("", tag="train_summary", wrap=360, color=(160, 160, 170))
+        # Latest scores.
+        with dpg.plot(label="Latest scores (one bar per episode)", height=120, width=-1, tag="score_plot"):
+            dpg.add_plot_axis(dpg.mvXAxis, label="", tag="score_x", no_tick_labels=True)
+            with dpg.plot_axis(dpg.mvYAxis, label="score", tag="score_y"):
+                dpg.add_bar_series([], [], label="score", tag="score_bars")
+        # Event monitor.
+        dpg.add_text("Event monitor", color=(242, 214, 72))
+        with dpg.child_window(height=150, border=True, tag="event_monitor"):
+            dpg.add_text("", tag="event_text", wrap=340)
+        # The three graphs.
+        with dpg.plot(label="Average score", height=130, width=-1, tag="perf_plot"):
+            dpg.add_plot_legend()
+            dpg.add_plot_axis(dpg.mvXAxis, label="iteration", tag="perf_x")
+            with dpg.plot_axis(dpg.mvYAxis, label="score", tag="perf_y"):
+                dpg.add_line_series([], [], label="mean", tag="perf_train")
+                dpg.add_line_series([], [], label="validation", tag="perf_val")
+                dpg.add_line_series([], [], label="best", tag="perf_mean")
+        with dpg.plot(label="Entropy (lower = more confident)", height=110, width=-1, tag="stab_plot"):
+            dpg.add_plot_axis(dpg.mvXAxis, label="iteration", tag="stab_x")
+            with dpg.plot_axis(dpg.mvYAxis, label="nats", tag="stab_y"):
+                dpg.add_line_series([], [], label="entropy", tag="stab_entropy")
+        with dpg.plot(label="Average game length (learner survival)", height=110, width=-1, tag="len_plot"):
+            dpg.add_plot_axis(dpg.mvXAxis, label="iteration", tag="len_x")
+            with dpg.plot_axis(dpg.mvYAxis, label="ticks", tag="len_y"):
+                dpg.add_line_series([], [], label="length", tag="len_series")
+        # Learning statistics.
+        dpg.add_text("Learning statistics", color=(242, 214, 72))
+        dpg.add_text("", tag="learn_stats", wrap=360)
+        dpg.add_progress_bar(default_value=0.0, overlay="rollout", tag="rollout_bar", width=-1)
+        dpg.add_text("", tag="system_stats", wrap=360, color=(160, 160, 170))
+        # Champion genes.
+        with dpg.plot(label="Learner genes (gold = changed since last step)", height=120, width=-1, tag="gene_plot"):
+            dpg.add_plot_axis(dpg.mvXAxis, label="gene", tag="gene_x")
+            with dpg.plot_axis(dpg.mvYAxis, label="value", tag="gene_y"):
+                dpg.add_bar_series([], [], label="unchanged", tag="gene_same")
+                dpg.add_bar_series([], [], label="changed", tag="gene_changed")
+        # Time plot kept for the run folder view.
+        with dpg.plot(label="Seconds per iteration", height=100, width=-1, tag="time_plot"):
+            dpg.add_plot_axis(dpg.mvXAxis, label="iteration", tag="time_x")
+            with dpg.plot_axis(dpg.mvYAxis, label="s", tag="time_y"):
+                dpg.add_bar_series([], [], label="seconds", tag="time_bars")
+        # Champion use and files.
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Champion to all", callback=lambda: (self.session.give_champion(), self._rebuild_roster_table())
+            )
+            dpg.add_button(label="Champion to selected", callback=self._on_champion_selected)
+        with dpg.group(horizontal=True):
+            dpg.add_input_text(label="", default_value="run", tag="run_name", width=120)
+            dpg.add_button(
+                label="Save run folder", callback=lambda: self.session.save_training_run(dpg.get_value("run_name"))
+            )
+        self._tip(
+            "Writes results/<name>_<timestamp>/ with config, history, learning curves, events, champion and one PNG per chart plus GIFs."
+        )
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Save champion", callback=lambda: self._file_dialog(self._save_champion, ".json", "champion.json")
+            )
+            dpg.add_button(
+                label="Load champion into all", callback=lambda: self._file_dialog(self._load_champion, ".json")
+            )
+        # Advanced settings per method.
+        with dpg.collapsing_header(label="Advanced settings", default_open=False):
+            self._build_method_settings()
+
+    def _build_method_settings(self) -> None:
+        """The per-method settings groups (only the current method's group is shown)."""
+        # Imitation.
+        with dpg.group(tag="im_group", show=self.method == "imitation"):
 
             def im(name, convert=lambda v: v):
                 return lambda s, a: setattr(self.imitation, name, convert(a))
@@ -1333,7 +1457,6 @@ class Dashboard:
             dpg.add_combo(
                 ["voting"], label="teacher brain", default_value=self.imitation.teacher, callback=im("teacher")
             )
-            self._tip("The brain whose decisions the network learns to copy: the video's instinct-voting brain.")
             dpg.add_input_int(
                 label="demonstration games",
                 default_value=self.imitation.demonstration_games,
@@ -1343,9 +1466,16 @@ class Dashboard:
                 max_clamped=True,
                 callback=im("demonstration_games"),
             )
-            self._tip(
-                "Teacher games to record. Each gives about 24 tributes x hundreds of ticks of (perception, action) pairs."
+            dpg.add_input_int(
+                label="learn only from the top N placings (0 = all)",
+                default_value=self.imitation.winners_top,
+                min_value=0,
+                max_value=24,
+                min_clamped=True,
+                max_clamped=True,
+                callback=im("winners_top"),
             )
+            self._tip("Show it a few winning games: keep only the decisions of tributes that placed this well.")
             dpg.add_input_int(
                 label="epochs",
                 default_value=self.imitation.epochs,
@@ -1388,8 +1518,8 @@ class Dashboard:
                 max_clamped=True,
                 callback=im("workers"),
             )
-        # GA settings.
-        with dpg.group(tag="ga_group"):
+        # Genetic.
+        with dpg.group(tag="ga_group", show=self.method == "genetic"):
 
             def ga(name, convert=lambda v: v):
                 return lambda s, a: setattr(self.ga, name, convert(a))
@@ -1399,6 +1529,12 @@ class Dashboard:
                 label="brain to evolve",
                 default_value=self.ga.brain_name,
                 callback=ga("brain_name"),
+            )
+            dpg.add_combo(
+                ["voting", "self"], label="opponents", default_value=self.ga.opponents, callback=ga("opponents")
+            )
+            self._tip(
+                "voting: each genome is the learner against the voting brain (scored by return). self: the population plays itself (scored by placement)."
             )
             dpg.add_input_int(
                 label="population",
@@ -1464,9 +1600,6 @@ class Dashboard:
                 max_clamped=True,
                 callback=ga("validation_games"),
             )
-            self._tip(
-                "Games the champion plays against the default brain on fixed seeds each generation: the validation curve."
-            )
             dpg.add_input_int(
                 label="CPU workers",
                 default_value=self.ga.workers,
@@ -1476,11 +1609,80 @@ class Dashboard:
                 max_clamped=True,
                 callback=ga("workers"),
             )
-        # RL settings.
-        with dpg.group(tag="rl_group", show=False):
+        # NEAT.
+        with dpg.group(tag="neat_group", show=self.method == "neat"):
+
+            def ne(name, convert=lambda v: v):
+                return lambda s, a: setattr(self.neat, name, convert(a))
+
+            dpg.add_input_int(
+                label="population",
+                default_value=self.neat.population_size,
+                min_value=4,
+                max_value=480,
+                min_clamped=True,
+                max_clamped=True,
+                callback=ne("population_size"),
+            )
+            dpg.add_input_int(
+                label="generations",
+                default_value=self.neat.generations,
+                min_value=1,
+                max_value=1000,
+                min_clamped=True,
+                max_clamped=True,
+                callback=ne("generations"),
+            )
+            dpg.add_input_int(
+                label="target species",
+                default_value=self.neat.target_species,
+                min_value=1,
+                max_value=40,
+                min_clamped=True,
+                max_clamped=True,
+                callback=ne("target_species"),
+            )
+            dpg.add_slider_float(
+                label="add node rate",
+                default_value=self.neat.neat.add_node_rate,
+                min_value=0.0,
+                max_value=0.5,
+                callback=lambda s, a: setattr(self.neat.neat, "add_node_rate", a),
+            )
+            dpg.add_slider_float(
+                label="add connection rate",
+                default_value=self.neat.neat.add_connection_rate,
+                min_value=0.0,
+                max_value=0.5,
+                callback=lambda s, a: setattr(self.neat.neat, "add_connection_rate", a),
+            )
+            dpg.add_input_int(
+                label="validation games",
+                default_value=self.neat.validation_games,
+                min_value=0,
+                max_value=20,
+                min_clamped=True,
+                max_clamped=True,
+                callback=ne("validation_games"),
+            )
+            dpg.add_input_int(
+                label="CPU workers",
+                default_value=self.neat.workers,
+                min_value=1,
+                max_value=32,
+                min_clamped=True,
+                max_clamped=True,
+                callback=ne("workers"),
+            )
+        # REINFORCE and PPO share the reward function.
+        with dpg.group(tag="rl_group", show=self.method in ("reinforce", "ppo")):
 
             def rl(name, convert=lambda v: v):
-                return lambda s, a: setattr(self.rl, name, convert(a))
+                def cb(s, a):
+                    setattr(self.rl, name, convert(a))
+                    setattr(self.ppo, name, convert(a))
+
+                return cb
 
             dpg.add_input_int(
                 label="epochs",
@@ -1501,7 +1703,7 @@ class Dashboard:
                 callback=rl("episodes_per_epoch"),
             )
             dpg.add_input_int(
-                label="learners per game",
+                label="learner copies per game",
                 default_value=self.rl.learners_per_game,
                 min_value=1,
                 max_value=24,
@@ -1509,15 +1711,9 @@ class Dashboard:
                 max_clamped=True,
                 callback=rl("learners_per_game"),
             )
-            self._tip("Tributes driven by the learning policy; the rest use the default brain as opponents.")
+            self._tip("The same network drives this many starred tributes at once; the rest use the voting brain.")
             dpg.add_input_float(
                 label="learning rate", default_value=self.rl.learning_rate, format="%.5f", callback=rl("learning_rate")
-            )
-            dpg.add_input_float(
-                label="value learning rate",
-                default_value=self.rl.value_learning_rate,
-                format="%.5f",
-                callback=rl("value_learning_rate"),
             )
             dpg.add_slider_float(
                 label="entropy bonus",
@@ -1526,8 +1722,21 @@ class Dashboard:
                 max_value=0.2,
                 callback=rl("entropy_bonus"),
             )
-            self._tip(
-                "Keeps the policy varied. Too high and it never commits; too low and it collapses onto one action."
+            dpg.add_slider_float(
+                label="PPO clip ratio",
+                default_value=self.ppo.clip_ratio,
+                min_value=0.05,
+                max_value=0.5,
+                callback=lambda s, a: setattr(self.ppo, "clip_ratio", a),
+            )
+            dpg.add_input_int(
+                label="PPO passes per batch",
+                default_value=self.ppo.update_epochs,
+                min_value=1,
+                max_value=20,
+                min_clamped=True,
+                max_clamped=True,
+                callback=lambda s, a: setattr(self.ppo, "update_epochs", a),
             )
             dpg.add_input_int(
                 label="validation games",
@@ -1547,7 +1756,6 @@ class Dashboard:
                 max_clamped=True,
                 callback=rl("workers"),
             )
-            # Rewards.
             with dpg.collapsing_header(label="Reward function", default_open=False):
                 r = self.session.config.reward
 
@@ -1562,6 +1770,7 @@ class Dashboard:
                     format="%.3f",
                     callback=rw("survive_tick"),
                 )
+                self._tip("The zombie video's lesson: reward survival too much and the learner just runs away.")
                 dpg.add_slider_float(
                     label="win", default_value=r.win, min_value=0.0, max_value=20.0, callback=rw("win")
                 )
@@ -1586,6 +1795,14 @@ class Dashboard:
                     callback=rw("need_gain"),
                 )
                 dpg.add_slider_float(
+                    label="approach water/food (dense, off by default)",
+                    default_value=r.approach,
+                    min_value=0.0,
+                    max_value=0.5,
+                    format="%.3f",
+                    callback=rw("approach"),
+                )
+                dpg.add_slider_float(
                     label="placement",
                     default_value=r.placement,
                     min_value=0.0,
@@ -1600,98 +1817,98 @@ class Dashboard:
                     format="%.3f",
                     callback=rw("discount"),
                 )
-        # Start / stop.
-        with dpg.group(horizontal=True):
-            dpg.add_button(label="Start training", callback=self._on_start_training, tag="train_start")
-            dpg.add_button(label="Stop after this step", callback=self.session.stop_training)
-        dpg.add_progress_bar(default_value=0.0, overlay="", tag="train_progress", width=-1)
-        dpg.add_text("", tag="train_summary", wrap=360, color=(160, 160, 170))
-        # The training feed.
-        with dpg.group(horizontal=True):
-            dpg.add_text("Training feed")
-            dpg.add_radio_button(
-                list(Session.FEED_MODES),
-                default_value=self.session.feed_mode,
-                horizontal=True,
-                callback=lambda s, a: setattr(self.session, "feed_mode", a),
-                tag="feed_mode",
+        # Curriculum settings.
+        with dpg.collapsing_header(label="Curriculum settings", default_open=False):
+            dpg.add_input_text(
+                label="opponents per stage",
+                default_value=",".join(str(o) for o in self.curriculum.opponents),
+                callback=lambda s, a: setattr(
+                    self.curriculum, "opponents", tuple(int(x) for x in a.split(",") if x.strip().isdigit()) or (23,)
+                ),
             )
-        self._tip(
-            "replay: after every step the arena replays one real evaluation game from that step (the population playing itself). live: the newest champion is given to the learner slots and plays a fresh game live, so the Network tab shows real activations. The next step is shown when the current game ends."
-        )
-        # Plots.
-        with dpg.plot(label="Performance", height=190, width=-1, tag="perf_plot"):
-            dpg.add_plot_legend()
-            dpg.add_plot_axis(dpg.mvXAxis, label="step", tag="perf_x")
-            with dpg.plot_axis(dpg.mvYAxis, label="score", tag="perf_y"):
-                dpg.add_line_series([], [], label="training", tag="perf_train")
-                dpg.add_line_series([], [], label="validation", tag="perf_val")
-                dpg.add_line_series([], [], label="population mean", tag="perf_mean")
-        with dpg.plot(label="Stability", height=160, width=-1, tag="stab_plot"):
-            dpg.add_plot_legend()
-            dpg.add_plot_axis(dpg.mvXAxis, label="step", tag="stab_x")
-            with dpg.plot_axis(dpg.mvYAxis, label="value", tag="stab_y"):
-                dpg.add_line_series([], [], label="policy loss", tag="stab_ploss")
-                dpg.add_line_series([], [], label="value loss", tag="stab_vloss")
-                dpg.add_line_series([], [], label="entropy", tag="stab_entropy")
-        with dpg.plot(label="Time per step (s)", height=130, width=-1, tag="time_plot"):
-            dpg.add_plot_axis(dpg.mvXAxis, label="step", tag="time_x")
-            with dpg.plot_axis(dpg.mvYAxis, label="seconds", tag="time_y"):
-                dpg.add_bar_series([], [], label="seconds", tag="time_bars")
-        with dpg.plot(label="Champion genes (gold = changed since last step)", height=150, width=-1, tag="gene_plot"):
-            dpg.add_plot_axis(dpg.mvXAxis, label="gene", tag="gene_x")
-            with dpg.plot_axis(dpg.mvYAxis, label="value", tag="gene_y"):
-                dpg.add_bar_series([], [], label="unchanged", tag="gene_same")
-                dpg.add_bar_series([], [], label="changed", tag="gene_changed")
-        # Use the champion.
-        with dpg.group(horizontal=True):
-            dpg.add_button(
-                label="Champion to all", callback=lambda: (self.session.give_champion(), self._rebuild_roster_table())
+            dpg.add_slider_float(
+                label="promotion threshold (mean score)",
+                default_value=self.curriculum.threshold,
+                min_value=-5.0,
+                max_value=10.0,
+                callback=lambda s, a: setattr(self.curriculum, "threshold", a),
             )
-            dpg.add_button(label="Champion to selected", callback=self._on_champion_selected)
-            dpg.add_button(label="Watch champion", callback=self._on_watch_champion)
-        self._tip(
-            "Watch: every tribute gets the champion brain and a new game starts at normal speed. Select a tribute and open the Network tab to watch its hidden layers."
-        )
-        # Files.
-        with dpg.group(horizontal=True):
-            dpg.add_input_text(label="", default_value="run", tag="run_name", width=120)
-            dpg.add_button(
-                label="Save run folder", callback=lambda: self.session.save_training_run(dpg.get_value("run_name"))
-            )
-        self._tip(
-            "Writes results/<name>_<timestamp>/ with config.json, history.json, champion.json and one PNG per chart plus a growing-curve GIF."
-        )
-        with dpg.group(horizontal=True):
-            dpg.add_button(
-                label="Save champion", callback=lambda: self._file_dialog(self._save_champion, ".json", "champion.json")
-            )
-            dpg.add_button(
-                label="Load champion into all", callback=lambda: self._file_dialog(self._load_champion, ".json")
+            dpg.add_input_int(
+                label="max iterations per stage",
+                default_value=self.curriculum.max_iterations_per_stage,
+                min_value=1,
+                max_value=1000,
+                min_clamped=True,
+                max_clamped=True,
+                callback=lambda s, a: setattr(self.curriculum, "max_iterations_per_stage", a),
             )
 
     def _on_method(self, sender, value) -> None:
-        """Switch between the GA and RL settings."""
+        """Switch the settings group and the help text."""
         # Remember.
         self.method = value
+        dpg.set_value("method_help", self.METHOD_HELP[value])
         # Show the right group.
-        dpg.configure_item("im_group", show=value == "imitation")
-        dpg.configure_item("ga_group", show=value == "genetic")
-        dpg.configure_item("rl_group", show=value == "reinforce")
+        for tag, methods in (
+            ("im_group", ("imitation",)),
+            ("ga_group", ("genetic",)),
+            ("neat_group", ("neat",)),
+            ("rl_group", ("reinforce", "ppo")),
+        ):
+            dpg.configure_item(tag, show=value in methods)
+
+    def _current_settings(self):
+        """The settings dataclass for the current method (a fresh copy)."""
+        # Per method.
+        if self.method == "imitation":
+            return ImitationConfig(**vars(self.imitation))
+        if self.method == "genetic":
+            return TrainingConfig(**vars(self.ga))
+        if self.method == "neat":
+            return NeatTrainerConfig(**vars(self.neat))
+        if self.method == "reinforce":
+            return RLConfig(**vars(self.rl))
+        return PPOConfig(**vars(self.ppo))
 
     def _on_start_training(self) -> None:
         """Start the trainer with the current settings."""
         # Reset the plots.
         self._plotted_steps = -1
-        # Warm start?
-        warm = bool(dpg.get_value("warm_start"))
+        self._events_shown = 0
         # Go.
-        if self.method == "genetic":
-            self.session.start_training(TrainingConfig(**vars(self.ga)), "genetic", warm)
-        elif self.method == "reinforce":
-            self.session.start_training(RLConfig(**vars(self.rl)), "reinforce", warm)
-        else:
-            self.session.start_training(ImitationConfig(**vars(self.imitation)), "imitation", warm)
+        self.session.start_training(
+            self._current_settings(),
+            self.method,
+            bool(dpg.get_value("warm_start")),
+            CurriculumConfig(**vars(self.curriculum)),
+        )
+
+    def _on_pause_training(self) -> None:
+        """Toggle pause."""
+        # Flip.
+        self.session.pause_training(not self.session.training_paused)
+
+    def _on_reset_training(self) -> None:
+        """Forget the current run."""
+        # Reset.
+        self.session.reset_training()
+        self._plotted_steps = -1
+        self._events_shown = 0
+        for tag in (
+            "perf_train",
+            "perf_val",
+            "perf_mean",
+            "stab_entropy",
+            "len_series",
+            "time_bars",
+            "gene_same",
+            "gene_changed",
+            "score_bars",
+        ):
+            dpg.set_value(tag, [[], []])
+        dpg.set_value("event_text", "")
+        dpg.set_value("train_summary", "")
+        dpg.set_value("learn_stats", "")
 
     def _on_champion_selected(self) -> None:
         """Give the champion to the selected tribute."""
@@ -1701,30 +1918,52 @@ class Dashboard:
             self._rebuild_roster_table()
 
     def _on_watch_champion(self) -> None:
-        """Give the champion to everyone and start a game at normal speed."""
-        # Give.
-        if self.session.give_champion() == 0:
-            self.session.status = "No champion yet: train first"
+        """Give the champion to the learner slots and start a game at normal speed."""
+        # Give and play.
+        if not self.session.start_champion_game(all_slots=False):
             return
-        # Table.
         self._rebuild_roster_table()
-        # New game at normal speed.
-        self.session.new_game()
         self._set_speed(8.0)
-        self.session.playing = True
+        dpg.set_value("right_tabs", "tab_network")
 
     def _refresh_training(self) -> None:
-        """Update the progress bar, plots and summary from the session."""
+        """Update the dashboard panels from the session."""
         # Progress.
         done, total = self.session.training_progress
         running = self.session.training_running
         dpg.set_value("train_progress", done / total if total else 0.0)
+        dpg.set_value("rollout_bar", done / total if total else 0.0)
+        dpg.configure_item(
+            "rollout_bar",
+            overlay=f"rollout {done}/{total} games ({(done / total * 100) if total else 0:.0f}%)"
+            if total
+            else "rollout",
+        )
         steps = len(self.session.training_history())
         dpg.configure_item(
             "train_progress",
-            overlay=f"step {steps}: {done}/{total} games" if running else (f"{steps} steps done" if steps else ""),
+            overlay=f"iteration {steps}" + (" (paused)" if self.session.training_paused else "")
+            if running
+            else (f"{steps} iterations done" if steps else ""),
         )
         dpg.configure_item("train_start", enabled=not running)
+        dpg.configure_item("train_pause", label="Resume" if self.session.training_paused else "Pause")
+        # Event monitor.
+        events = self.session.training_events()
+        if len(self.session.trainer.events.events) != self._events_shown if self.session.trainer is not None else False:
+            self._events_shown = len(self.session.trainer.events.events)
+            dpg.set_value("event_text", "\n".join(events))
+        # System stats every frame is cheap.
+        stats = self.session.learning_stats()
+        system = self.session.system.read()
+        dpg.set_value(
+            "system_stats",
+            f"CPU {system['cpu_percent']:.0f}%   memory {system['memory_mb']:.0f} MB ({system['memory_percent']:.0f}% of RAM)   GPU: {system['gpu']}",
+        )
+        dpg.set_value(
+            "learn_stats",
+            f"iteration {stats['iteration']}   seed {stats['seed']}   {stats['seconds_per_iteration']:.1f} s/iteration   max score {stats['max_score']:.2f}   learning time {stats['learning_time']:.0f} s\nstage {stats['stage']} ({stats['opponents']} opponents)   mean score {stats['mean_score']:.2f}   entropy {stats['entropy']:.2f}   mean length {stats['mean_length']:.0f} ticks",
+        )
         # Plot only when there is something new.
         rows = self.session.training_rows()
         if len(rows) == self._plotted_steps:
@@ -1732,97 +1971,53 @@ class Dashboard:
         self._plotted_steps = len(rows)
         if not rows:
             return
-        # X axis.
-        genetic = self.session.training_method == "genetic"
-        xs = [float(r["generation" if genetic else "epoch"]) for r in rows]
-        # Performance and stability, per method.
-        method = self.session.training_method
-        if method == "imitation":
-            dpg.set_value("perf_train", [xs, [r["train_accuracy"] for r in rows]])
-            dpg.set_value("perf_val", [xs, [r["val_accuracy"] for r in rows]])
-            dpg.set_value("perf_mean", [xs, [r["val_win_rate"] for r in rows]])
-            dpg.configure_item("perf_train", label="training accuracy")
-            dpg.configure_item("perf_val", label="validation accuracy")
-            dpg.configure_item("perf_mean", label="validation win rate")
-            dpg.set_value("stab_ploss", [xs, [r["train_loss"] for r in rows]])
-            dpg.set_value("stab_vloss", [xs, [r["val_loss"] for r in rows]])
-            dpg.configure_item("stab_ploss", label="training loss")
-            dpg.configure_item("stab_vloss", label="validation loss")
-            dpg.set_value("stab_entropy", [xs, [r["val_survival"] / 100.0 for r in rows]])
-            dpg.configure_item("stab_entropy", label="validation survival (x100 ticks)")
-        elif genetic:
-            dpg.set_value("perf_train", [xs, [r["best_fitness"] for r in rows]])
-            dpg.set_value("perf_val", [xs, [r["val_fitness"] for r in rows]])
-            dpg.set_value("perf_mean", [xs, [r["mean_fitness"] for r in rows]])
-            dpg.configure_item("perf_train", label="best fitness")
-            dpg.configure_item("perf_val", label="validation fitness")
-            dpg.set_value("stab_ploss", [[], []])
-            dpg.set_value("stab_vloss", [[], []])
-            dpg.set_value(
-                "stab_entropy", [xs, [r["telemetry_entropy"] if "telemetry_entropy" in r else 0.0 for r in rows]]
-            )
-        else:
-            dpg.set_value("perf_train", [xs, [r["train_return"] for r in rows]])
-            dpg.set_value("perf_val", [xs, [r["val_return"] for r in rows]])
-            dpg.set_value("perf_mean", [xs, [r["win_rate"] for r in rows]])
-            dpg.configure_item("perf_train", label="training return")
-            dpg.configure_item("perf_val", label="validation return")
-            dpg.configure_item("perf_mean", label="win rate")
-            dpg.set_value("stab_ploss", [xs, [r["policy_loss"] for r in rows]])
-            dpg.set_value("stab_vloss", [xs, [r["value_loss"] for r in rows]])
-            dpg.configure_item("stab_ploss", label="policy loss")
-            dpg.configure_item("stab_vloss", label="value loss")
-            dpg.set_value("stab_entropy", [xs, [r["entropy"] for r in rows]])
-            dpg.configure_item("stab_entropy", label="entropy")
-        # Behaviour entropy for the GA comes from telemetry.
-        if genetic:
-            history = self.session.training_history()
-            dpg.set_value(
-                "stab_entropy", [xs, [s.telemetry.get("entropy", 0.0) if s.telemetry else 0.0 for s in history]]
-            )
-            dpg.configure_item("stab_entropy", label="action entropy")
-        # Timing.
+        xs = [float(r["iteration"]) for r in rows]
+        dpg.set_value("perf_train", [xs, [r["mean_score"] for r in rows]])
+        dpg.set_value("perf_val", [xs, [r["val_score"] for r in rows]])
+        dpg.set_value("perf_mean", [xs, [r["best_score"] for r in rows]])
+        dpg.set_value("stab_entropy", [xs, [r["entropy"] for r in rows]])
+        dpg.set_value("len_series", [xs, [r["mean_length"] for r in rows]])
         dpg.set_value("time_bars", [xs, [r["seconds"] for r in rows]])
-        # The network evolution plots on the Network tab.
-        self._refresh_evolution()
+        scores = self.session.latest_scores()
+        dpg.set_value("score_bars", [list(range(len(scores))), scores])
         # Genes.
         genes = self.session.champion_genes()
         if genes is not None:
             values, changed = genes
-            # Cap what is drawn for big networks.
             n = min(len(values), 400)
             idx = np.arange(n, dtype=float)
             dpg.set_value("gene_same", [idx[~changed[:n]].tolist(), values[:n][~changed[:n]].tolist()])
             dpg.set_value("gene_changed", [idx[changed[:n]].tolist(), values[:n][changed[:n]].tolist()])
-            # Gene names for the voting brain.
             if len(values) == len(GENE_NAMES):
                 dpg.set_axis_ticks("gene_x", tuple((name, float(i)) for i, name in enumerate(GENE_NAMES)))
-            dpg.configure_item(
-                "gene_plot",
-                label=f"Champion genes ({len(values)} values{', first 400 shown' if len(values) > n else ''}; gold = changed since last step)",
-            )
+        # The network evolution plots on the Network tab.
+        self._refresh_evolution()
         # Fit.
-        for axis in ("perf_x", "perf_y", "stab_x", "stab_y", "time_x", "time_y", "gene_x", "gene_y"):
+        for axis in (
+            "perf_x",
+            "perf_y",
+            "stab_x",
+            "stab_y",
+            "len_x",
+            "len_y",
+            "time_x",
+            "time_y",
+            "gene_x",
+            "gene_y",
+            "score_x",
+            "score_y",
+        ):
             dpg.fit_axis_data(axis)
         # Summary.
         last = rows[-1]
-        total_seconds = last.get("cumulative_seconds", sum(r["seconds"] for r in rows))
-        if method == "imitation":
-            dpg.set_value(
-                "train_summary",
-                f"{len(rows)} epoch(s), {total_seconds:.0f}s total. Validation accuracy {last['val_accuracy']:.0%}, loss {last['val_loss']:.3f}, survival {last['val_survival']:.0f} ticks, win rate {last['val_win_rate']:.2f}. Keep 'start from the current champion' ticked and evolve or reinforce from here.",
-            )
-        elif genetic:
-            best = max(rows, key=lambda r: r["best_fitness"])
-            dpg.set_value(
-                "train_summary",
-                f"{len(rows)} generation(s), {total_seconds:.0f}s total. Best fitness {best['best_fitness']:.3f} (gen {best['generation']}), validation {last['val_fitness']:.3f}.",
-            )
-        else:
-            dpg.set_value(
-                "train_summary",
-                f"{len(rows)} epoch(s), {total_seconds:.0f}s total. Train return {last['train_return']:.2f}, validation {last['val_return']:.2f}, survival {last['train_survival']:.0f} ticks, win rate {last['win_rate']:.2f}, entropy {last['entropy']:.2f}.",
-            )
+        extra = {k[6:]: v for k, v in last.items() if k.startswith("extra_")}
+        extra_text = ", ".join(
+            f"{k} {v:.3f}" if isinstance(v, float) else f"{k} {v}" for k, v in list(extra.items())[:4]
+        )
+        dpg.set_value(
+            "train_summary",
+            f"{self.session.training_method}: {len(rows)} iteration(s), mean score {last['mean_score']:.2f}, validation {last['val_score']:.2f}, win rate {last['win_rate']:.2f}. {extra_text}",
+        )
 
     # ---------------------------------------------------------- research
 
@@ -1864,7 +2059,7 @@ class Dashboard:
         # Questions.
         dpg.add_text("Answers a reviewer will ask for", color=(242, 214, 72))
         dpg.add_text(
-            "Method: imitation (behaviour cloning of the voting brain, supervised cross-entropy), genetic algorithm (neuroevolution) or REINFORCE with a value baseline, chosen on the Train tab, with warm starts between them. Rewards: the Reward function section there (the dense approach reward is off by default). Observation: a 50-value vector (Brains tab lists it), not a grid. Dashboard: custom, Dear PyGui; charts by matplotlib.",
+            "Method: imitation (behaviour cloning of the voting brain), genetic algorithm (neuroevolution), NEAT (neuroevolution of topologies), REINFORCE with a value baseline, or PPO (clipped policy gradient), chosen on the Train tab, with warm starts between them and an optional opponent curriculum; experiments/run_comparison.py trains them all under one budget and runs a 75-game tournament. Rewards: the Reward function section there (the dense approach reward is off by default). Observation: a 50-value vector (Brains tab lists it), not a grid. Dashboard: custom, Dear PyGui; charts by matplotlib.",
             wrap=360,
             color=(160, 160, 170),
         )

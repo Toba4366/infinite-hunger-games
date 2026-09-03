@@ -1,0 +1,248 @@
+"""training/common.py - what every training method has in common.
+
+Every method here trains one learner network against opponents that use
+the voting brain from the video. They differ in how the network changes
+between iterations (copying a teacher, evolving, or following rewards),
+but not in how an iteration is scored or reported. This module holds the
+shared pieces: the per-iteration statistics every trainer fills in, the
+event log that feeds the dashboard's event monitor, the curriculum that
+grows the number of opponents as the learner improves, a system monitor
+for CPU and memory, and the description of a learner brain that worker
+processes can rebuild.
+"""
+
+# Settings and stats.
+# Timestamps for events.
+import time
+from dataclasses import dataclass, field
+
+# Type hints.
+from typing import Any
+
+# numpy for genomes.
+import numpy as np
+
+# Brains.
+from hunger_games.brain.base import Brain
+from hunger_games.brain.neural import NeuralBrain
+
+# Settings.
+from hunger_games.config import NeuralConfig
+
+# Recordings for the training feed.
+from hunger_games.recorder import Recording
+
+
+@dataclass
+class IterationStats:
+    """One iteration of any method, in the same shape for every method."""
+
+    # Which iteration (0 first).
+    iteration: int
+    # The score of every learner episode this iteration (a return under the reward function).
+    scores: list[float]
+    # Their mean.
+    mean_score: float
+    # The best of them.
+    best_score: float
+    # Policy entropy (nats): high = exploring, low = confident.
+    entropy: float
+    # Mean ticks the learner survived this iteration.
+    mean_length: float
+    # Fraction of learner episodes that won.
+    win_rate: float
+    # Mean score in the greedy validation games on fixed seeds.
+    val_score: float
+    # Seconds this iteration took.
+    seconds: float
+    # Seconds since training started.
+    cumulative_seconds: float
+    # Curriculum stage index and the number of opponents in it.
+    stage: int = 0
+    # Opponents faced.
+    opponents: int = 23
+    # Method-specific numbers (losses, species counts, accuracy, ...).
+    extra: dict = field(default_factory=dict)
+    # The learner after this iteration: a genome array for neural brains, a NEAT genome dict for NEAT.
+    learner: Any = field(default=None, repr=False)
+    # Behaviour telemetry summary of the learner's episodes.
+    telemetry: dict = field(default_factory=dict, repr=False)
+    # A recording of one real episode from this iteration (the dashboard's training feed).
+    showcase: Recording | None = field(default=None, repr=False)
+
+    def to_row(self) -> dict:
+        """A JSON-friendly dictionary without the big arrays."""
+        # The plain fields.
+        row = {
+            k: v for k, v in self.__dict__.items() if k not in ("learner", "telemetry", "showcase", "scores", "extra")
+        }
+        # Flatten the extras in.
+        row.update({f"extra_{k}": v for k, v in self.extra.items()})
+        # Done.
+        return row
+
+
+class EventLog:
+    """Timestamped one-line messages about what training is doing (the dashboard's event monitor)."""
+
+    def __init__(self, capacity: int = 500) -> None:
+        """Keep at most `capacity` recent events."""
+        # The events, newest last.
+        self.events: list[str] = []
+        # How many to keep.
+        self.capacity = capacity
+        # When the log started, so timestamps are relative.
+        self.started = time.time()
+
+    def add(self, kind: str, message: str) -> None:
+        """Record an event of a kind ("rollout", "evolution", "curriculum", "record", "info")."""
+        # Seconds since the start.
+        stamp = time.time() - self.started
+        # Append.
+        self.events.append(f"[{stamp:7.1f}s] {kind:<10} {message}")
+        # Trim.
+        if len(self.events) > self.capacity:
+            self.events = self.events[-self.capacity :]
+
+    def tail(self, count: int = 20) -> list[str]:
+        """The most recent events."""
+        # The last ones.
+        return self.events[-count:]
+
+
+@dataclass
+class CurriculumConfig:
+    """Grow the difficulty as the learner improves, like the zombie video's one-to-sixteen ladder."""
+
+    # Whether the curriculum is on.
+    enabled: bool = True
+    # Opponents per stage (the learner's own copies are added on top).
+    opponents: tuple[int, ...] = (1, 3, 7, 11, 23)
+    # Promote when the mean score of the last `window` iterations reaches this (per stage, scaled by the win bonus).
+    threshold: float = 3.0
+    # Iterations averaged for the promotion test.
+    window: int = 5
+    # Promote anyway after this many iterations in a stage.
+    max_iterations_per_stage: int = 40
+
+
+class Curriculum:
+    """Tracks the current stage and decides when to promote."""
+
+    def __init__(self, config: CurriculumConfig) -> None:
+        """Start at the first stage."""
+        # Settings.
+        self.config = config
+        # Current stage index.
+        self.stage = 0
+        # Iterations spent in the current stage.
+        self.iterations_in_stage = 0
+        # Recent mean scores in this stage.
+        self.recent: list[float] = []
+
+    @property
+    def opponents(self) -> int:
+        """Opponents in the current stage (or the last stage when the curriculum is off)."""
+        # Off: the hardest stage.
+        if not self.config.enabled:
+            return self.config.opponents[-1]
+        # Current.
+        return self.config.opponents[min(self.stage, len(self.config.opponents) - 1)]
+
+    @property
+    def finished(self) -> bool:
+        """Is the learner in the final stage?"""
+        # Last stage reached.
+        return not self.config.enabled or self.stage >= len(self.config.opponents) - 1
+
+    def observe(self, mean_score: float) -> bool:
+        """Record an iteration's mean score; returns True when the learner is promoted."""
+        # Off or done.
+        if self.finished:
+            return False
+        # Count.
+        self.iterations_in_stage += 1
+        # Remember.
+        self.recent.append(mean_score)
+        self.recent = self.recent[-self.config.window :]
+        # Ready?
+        good_enough = len(self.recent) >= self.config.window and float(np.mean(self.recent)) >= self.config.threshold
+        # Or stuck long enough.
+        timed_out = self.iterations_in_stage >= self.config.max_iterations_per_stage
+        # Promote.
+        if good_enough or timed_out:
+            self.stage += 1
+            self.iterations_in_stage = 0
+            self.recent = []
+            return True
+        # Stay.
+        return False
+
+
+class SystemMonitor:
+    """CPU, memory and GPU readings for the dashboard (psutil when available)."""
+
+    def __init__(self) -> None:
+        """Try to import psutil once."""
+        # Optional dependency.
+        try:
+            import psutil  # noqa: PLC0415 - optional
+
+            self.psutil = psutil
+            # Prime the CPU counter (the first call always returns 0).
+            psutil.cpu_percent(interval=None)
+        except ImportError:
+            self.psutil = None
+
+    def read(self) -> dict:
+        """The current readings."""
+        # Without psutil, report what we can.
+        if self.psutil is None:
+            return {"cpu_percent": 0.0, "memory_mb": 0.0, "memory_percent": 0.0, "gpu": "not used (numpy on the CPU)"}
+        # Process memory.
+        process = self.psutil.Process()
+        # Readings.
+        return {
+            "cpu_percent": float(self.psutil.cpu_percent(interval=None)),
+            "memory_mb": process.memory_info().rss / (1024 * 1024),
+            "memory_percent": float(self.psutil.virtual_memory().percent),
+            "gpu": "not used (numpy on the CPU)",
+        }
+
+
+@dataclass
+class LearnerSpec:
+    """How to rebuild a learner brain in a worker process: its kind and its genome."""
+
+    # "neural" (a NeuralBrain genome array) or "neat" (a NEAT genome dictionary).
+    kind: str
+    # The genome: a flat array for neural, a dict for NEAT.
+    genome: Any
+    # The neural architecture (neural only).
+    neural: NeuralConfig | None = None
+
+
+def build_learner(spec: LearnerSpec, chaos: float, rng: np.random.Generator) -> Brain:
+    """Build the learner brain a spec describes."""
+    # A NEAT genome.
+    if spec.kind == "neat":
+        from hunger_games.brain.neat import NeatBrain, NeatGenome  # noqa: PLC0415 - avoid an import cycle
+
+        return NeatBrain(NeatGenome.from_dict(spec.genome), chaos=chaos)
+    # A voting brain's eight genes.
+    if spec.kind == "voting":
+        from hunger_games.brain.voting import VotingBrain  # noqa: PLC0415 - avoid an import cycle
+
+        return VotingBrain(chaos=chaos, genome=np.asarray(spec.genome, dtype=float))
+    # A neural network.
+    brain = NeuralBrain(chaos=chaos, config=spec.neural, rng=rng)
+    brain.set_genome(np.asarray(spec.genome, dtype=float))
+    return brain
+
+
+def learner_ids(num_players: int, learners: int) -> list[int]:
+    """Evenly spread learner slots across the roster (so learners are not all neighbours on the podiums)."""
+    # How many fit.
+    count = max(1, min(learners, num_players))
+    # Spread.
+    return [int(i * num_players / count) for i in range(count)]

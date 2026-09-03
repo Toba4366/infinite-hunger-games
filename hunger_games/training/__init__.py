@@ -11,10 +11,25 @@ The dashboard's Train tab drives them; the scripts in `experiments/` do too.
 """
 
 # The genetic trainer and its settings.
+# Shared pieces.
+from hunger_games.training.common import (
+    Curriculum,
+    CurriculumConfig,
+    EventLog,
+    IterationStats,
+    LearnerSpec,
+    SystemMonitor,
+)
 from hunger_games.training.genetic import GenerationStats, GeneticTrainer, TrainingConfig
 
 # The imitation (behaviour cloning) trainer and its settings.
 from hunger_games.training.imitation import ImitationConfig, ImitationStats, ImitationTrainer
+
+# NEAT.
+from hunger_games.training.neat import NeatTrainer, NeatTrainerConfig
+
+# PPO.
+from hunger_games.training.ppo import PPOConfig, PPOTrainer
 
 # The policy-gradient trainer and its settings.
 from hunger_games.training.reinforce import EpochStats, ReinforceTrainer, RLConfig
@@ -24,6 +39,16 @@ from hunger_games.training.runs import save_run
 
 # What `from hunger_games.training import *` exposes.
 __all__ = [
+    "Curriculum",
+    "CurriculumConfig",
+    "EventLog",
+    "IterationStats",
+    "LearnerSpec",
+    "SystemMonitor",
+    "NeatTrainer",
+    "NeatTrainerConfig",
+    "PPOTrainer",
+    "PPOConfig",
     "ImitationTrainer",
     "ImitationConfig",
     "ImitationStats",

@@ -84,37 +84,45 @@ highlighted in gold. The picture updates every tick.
 
 ![A neural tribute's network drawn live](images/07_network.png)
 
-## 7. Train, and watch training happen
+## 7. Train one network, and watch it learn
 
-The **Train** tab has three methods. Start with **imitation** for a neural
-brain: a fresh network picks "drink" one time in sixteen even when standing
-in water, so it dies of thirst on day three before any reward can teach it
-otherwise. Imitation plays games with the voting brain, records every
-decision, and trains the network to copy them, which gives it working
-instincts (measured: dehydration falls from ten of twelve learner deaths to
-two, and the student matches the teacher 80 percent of the time with the
-default 64 by 32 network). Then keep **start from the current champion**
-ticked and pick **genetic**, which evolves a population of genomes by
-playing them against each other (use a small mutation scale, about 0.02, so
-the instincts survive), or **reinforce**, which trains by policy gradient
-with a value baseline using the reward function shown on the same tab. Every
-method logs each step to the Performance, Stability and Time plots, and the
-Champion genes plot highlights in gold the genes that changed since the
-previous step.
+The **Train** tab trains one network. It plays the tributes marked with a
+gold star; every other tribute uses the video's voting brain, so the
+learner always faces the same opponent it is being measured against. Pick
+a method from the combo, and its one-line explanation appears underneath:
 
-The **training feed** is how you watch training. Set it to **replay** and
-after every step the arena replays one real evaluation game from that step.
-Set it to **live** and the newest champion is given to the learner slots and
-plays a fresh game live, so the Network tab shows real activations. The
-Network tab's "How the champion network changed over training" section
-plots the size of each step's change and the genome as a heat map.
+- **imitation** copies the voting brain's decisions (supervised). Start
+  here: a fresh network picks "drink" one time in sixteen even while
+  standing in water and dies of thirst on day three, so it needs instincts
+  before any reward can teach it. "Learn only from the top N placings"
+  shows it winning games only.
+- **genetic** evolves the weights of a population; **neat** evolves the
+  shape of the network too, in species, the way the Monopoly video does.
+- **reinforce** and **ppo** learn from the reward function; PPO is the
+  zombie video's method and the most stable of the two.
+
+Keep **start from the current champion** ticked so each method continues
+from the last champion, and tick the **curriculum** to face 1, 3, 7, 11
+and then 23 opponents, promoted as the score clears each stage, the way the
+zombie count grew from one to sixteen.
+
+The panels follow the zombie video's dashboard: **Latest scores** shows one
+bar per episode of the newest iteration; the **event monitor** logs
+rollouts, records, evolution and curriculum promotions; the three graphs
+show average score (mean, validation and best), entropy (lower means more
+confident) and average game length; **learning statistics** show the
+iteration, seed, seconds per iteration, maximum score, learning time, stage
+and the rollout bar; and the line below shows CPU and memory. **Pause**
+holds the run between iterations, **Reset** forgets it, **Watch agent**
+gives the champion to the starred tributes and plays a game live so the
+Network tab shows real activations (NEAT genomes are drawn as graphs).
 
 ![Training running with the feed on and the plots filling](images/08_train.png)
 
-When training ends, **Champion to all** or **Watch champion** puts the best
-brain into the roster, **Save run folder** writes `results/<name>_<timestamp>/`
-with the config, history, champion and one PNG per chart plus a growing-curve
-GIF, and **Save champion** writes a JSON file you can load into any roster.
+**Save run folder** writes `results/<name>_<timestamp>/` with the config,
+history, the shared learning curves, the event log, the champion and one PNG
+per chart plus GIFs. **Save champion** writes a JSON file you can load into
+any roster.
 
 ## 8. Research
 

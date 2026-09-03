@@ -2,7 +2,7 @@
 
 **Source:** [hunger_games/scenario.py](../hunger_games/scenario.py)
 **Depends on:** only the standard library (`dataclasses`, `json`, `pathlib`). It does not import anything from the package, so it is pure data.
-**Used by:** [game.py](game.md) (`Scenario`, `TributeSpec`), `recorder.py` (stores the scenario with a replay), `training/genetic.py` (trains on a painted map), the dashboard (`ui/session.py` builds and saves one; `ui/app.py` has the Save / Load buttons), and `tests/test_scenario.py`.
+**Used by:** [game.py](game.md) (`Scenario`, `TributeSpec`), `recorder.py` (stores the scenario with a replay), every trainer in `training/` (trains on a painted map), the dashboard (`ui/session.py` builds and saves one; `ui/app.py` has the Save / Load buttons), and `tests/test_scenario.py`.
 
 ## Purpose
 
@@ -14,16 +14,18 @@ This is what the dashboard's **Save scenario** button writes and **Load scenario
 
 1. **Map.** If `scenario.terrain` is not `None`, it becomes a numpy `int8` grid and is passed to `Arena(config, rng, terrain=painted)`. The arena adopts it instead of generating one (see [arena.md](arena.md)).
 2. **Loot.** The layout's own loot is scattered only if `scenario.use_layout_loot` is `True`. Then every `LootSpec` in `scenario.loot` is placed on top with `arena.resources.place`, skipping cells that are not walkable.
-3. **Roster.** If `scenario.tributes` is a non-empty list, `Game._create_players` builds one `Player` per `TributeSpec` instead of rolling random tributes. Each spec's `weapon_quality`, `food`, `medicine` and `favor_bonus` are copied straight onto the player, and `start_thirst` / `start_hunger` / `start_health` override the config's random range when they are not `None`.
+3. **Roster.** If `scenario.tributes` is a non-empty list, `Game._create_players` builds one `Player` per `TributeSpec` instead of rolling random tributes. `Game._make_brain(index, spec.brain_name, spec.genome)` builds the brain: a NEAT brain when `brain_name` is `"neat"` and `genome` is a dictionary, otherwise the named kind with the flat genome loaded if there is one. Each spec's `weapon_quality`, `food`, `medicine` and `favor_bonus` are copied straight onto the player, and `start_thirst` / `start_hunger` / `start_health` override the config's random range when they are not `None`.
 4. **Podiums.** After the layout places everyone, `Game._place_players` moves any tribute whose spec has a `podium` to that cell, snapped with `arena.snap_to_podium`.
 
-The neural trainer uses the map part alone: `GeneticTrainer` is given `Scenario(terrain=...)` so every evaluation game runs on the painted arena while the roster is generated.
+The trainers use the map part alone: each is given `Scenario(terrain=...)` so every training game runs on the painted arena while the roster is generated.
 
 ## Concepts you need
 
 **Dataclasses with defaults.** Fields without a default must come first (`player_id`, `name`, ...); fields with defaults follow. `field(default_factory=list)` gives each scenario its own empty loot list rather than one shared list.
 
 **`Optional` values.** `float | None = None` means "unset". `Game` checks `is not None` and only then uses the value. That is how "leave it to the config" is expressed.
+
+**Two kinds of genome.** A voting brain has eight genes and a neural brain has thousands of weights; both are saved as a flat `list[float]`. A NEAT brain's genome is a `dict` with `nodes`, `connections` and `fitness` keys, the shape `NeatGenome.to_dict` writes, because the network's wiring is part of the genome. Both are JSON-friendly as they stand, so `TributeSpec` stores whichever it is given without converting.
 
 **`dataclasses.asdict`.** Recursively turns a dataclass, and any dataclasses nested inside lists, into plain dictionaries and lists. `Scenario.to_dict` is one line because of it.
 
@@ -54,8 +56,8 @@ One tribute as edited in the dashboard.
 | `sex` | `str` | required | `"F"` or `"M"`. |
 | `training_score` | `int` | required | The `1` to `12` training score. |
 | `survival_score` | `float` | required | The `0.05` to `0.95` survival aptitude. |
-| `brain_name` | `str` | `"voting"` | `"voting"`, `"random"` or `"neural"`. |
-| `genome` | `list[float] \| None` | `None` | A saved genome for that brain, or `None` for a fresh one. |
+| `brain_name` | `str` | `"voting"` | `"voting"`, `"random"` or `"neural"` (built by `create_brain`), or `"neat"` (needs a dictionary `genome`). |
+| `genome` | `list[float] \| dict \| None` | `None` | A saved genome for that brain: a flat list of weights for voting and neural, a NEAT genome dictionary for `"neat"`, or `None` for a fresh brain. |
 | `weapon_quality` | `float` | `0.0` | A weapon granted before the games (`0.0` = none). |
 | `food` | `int` | `0` | Rations granted before the games. |
 | `medicine` | `int` | `0` | Medkits granted before the games. |
@@ -66,6 +68,8 @@ One tribute as edited in the dashboard.
 | `podium` | `tuple[int, int] \| None` | `None` | Podium `(x, y)`, or `None` to use the layout's podium. |
 
 `Game._generated_spec` builds one of these for every slot when there is no roster, so the same class describes both generated and hand-edited tributes. `Game._start_value(minimum, override)` returns `clip(override, 0.01, 1.0)` when an override is given, otherwise a random draw between the config's `start_*_min` and `1.0`.
+
+The dashboard fills `genome` in two ways. `Session.give_champion` copies the trainer's champion in: a NEAT champion stays a dictionary, any other champion becomes `np.asarray(champion).tolist()`. `Session.load_champion_into` does the same from a champion file. In both cases `brain_name` is set to the trained kind at the same time, so the pair always match.
 
 ### `LootSpec`
 
@@ -111,7 +115,7 @@ A complete custom setup. Every field is optional.
 def to_dict(self) -> dict
 ```
 
-`asdict(self)`. Nested `LootSpec` and `TributeSpec` objects become dictionaries automatically.
+`asdict(self)`. Nested `LootSpec` and `TributeSpec` objects become dictionaries automatically. A `genome` that is already a list or a dictionary is copied through as it is.
 
 ### `Scenario.from_dict`
 
@@ -120,7 +124,7 @@ def to_dict(self) -> dict
 def from_dict(cls, data: dict) -> "Scenario"
 ```
 
-Rebuilds from a dictionary. Loot entries become `LootSpec(**item)`. If `tributes` is present and not `None`, each entry is copied, its `podium` list is turned back into a tuple, and a `TributeSpec` is built. Missing keys use the defaults (`use_layout_loot` `True`, `title` `"Untitled scenario"`, `terrain` `None`). Unknown keys inside a loot or tribute entry raise `TypeError`.
+Rebuilds from a dictionary. Loot entries become `LootSpec(**item)`. If `tributes` is present and not `None`, each entry is copied, its `podium` list is turned back into a tuple, and a `TributeSpec` is built. The `genome` entry is not touched: a list stays a list and a NEAT dictionary stays a dictionary, which is exactly what `Game._make_brain` wants. Missing keys use the defaults (`use_layout_loot` `True`, `title` `"Untitled scenario"`, `terrain` `None`). Unknown keys inside a loot or tribute entry raise `TypeError`.
 
 ### `Scenario.save`
 
@@ -203,6 +207,17 @@ spec.brain_name = "random"
 spec.medicine = 2
 ```
 
+Give one tribute a trained brain from a champion file. The genome is a list for a voting or neural champion and a dictionary for a NEAT champion; either goes straight into the spec:
+
+```python
+from hunger_games.training import GeneticTrainer
+
+data = GeneticTrainer.load_champion("results/my_run/champion.json")
+spec = scenario.tribute(0)
+spec.brain_name = data["brain_name"]
+spec.genome = data["genome"] if isinstance(data["genome"], dict) else data["genome"].tolist()
+```
+
 ## Gotchas
 
 - **The map size must match the config.** `Scenario.terrain` carries no width or height. `Game` passes `config.width` and `config.height` to the arena, so a 40 by 40 painted map with a default 120 by 120 config will fail. The dashboard keeps them in sync for you.
@@ -214,3 +229,5 @@ spec.medicine = 2
 - **`player_id` values should be unique and match the `podium` lookup.** `Game._place_players` looks podiums up by `player_id`; duplicates make one tribute win.
 - **`podium` comes back as a list from JSON only if you bypass `from_dict`.** `from_dict` converts it; hand-built dictionaries passed to `TributeSpec(**item)` do not get that treatment.
 - **`start_*` of `0` is not "unset".** The dashboard maps a slider at `0` to `None`; in code write `None` explicitly. A literal `0.0` is clipped to `0.01`, a nearly dead tribute.
+- **Store genomes as lists, not numpy arrays.** `json.dumps` cannot serialise an `np.ndarray`, so `save` would fail. Call `.tolist()` first, as the dashboard does. `Game` turns the list back into an array with `np.asarray`.
+- **`brain_name="neat"` needs a dictionary genome.** With `genome=None` or a flat list, `Game._make_brain` hands `"neat"` to `create_brain`, which raises `KeyError` because the registry only knows `voting`, `random` and `neural`. A neural genome must also match `config.neural`, or `set_genome` raises `ValueError`.

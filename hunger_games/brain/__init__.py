@@ -30,9 +30,18 @@ def create_brain(
     name: str, chaos: float, rng: np.random.Generator, neural: NeuralConfig | None = None, endgame: bool = False
 ) -> Brain:
     """Build a fresh brain of the given kind."""
+    # A NEAT brain without a saved genome starts minimal: inputs wired straight to the outputs.
+    if name == "neat":
+        from hunger_games.brain.neat import InnovationTracker, NeatBrain, NeatConfig, NeatGenome  # noqa: PLC0415
+        from hunger_games.brain.neural import MENU_SIZE  # noqa: PLC0415
+        from hunger_games.perception import VECTOR_SIZE  # noqa: PLC0415
+
+        return NeatBrain(
+            NeatGenome.minimal(VECTOR_SIZE, MENU_SIZE, rng, NeatConfig(), InnovationTracker()), chaos=chaos
+        )
     # Unknown names are a configuration mistake worth reporting clearly.
     if name not in BRAIN_REGISTRY:
-        raise KeyError(f"Unknown brain '{name}'. Choose from: {', '.join(BRAIN_REGISTRY)}")
+        raise KeyError(f"Unknown brain '{name}'. Choose from: {', '.join(BRAIN_REGISTRY)} or neat")
     # The neural brain needs its architecture settings and a generator for its starting weights.
     if name == NeuralBrain.name:
         return NeuralBrain(chaos=chaos, config=neural, rng=rng)

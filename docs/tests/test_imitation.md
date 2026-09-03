@@ -21,7 +21,7 @@ Without these tests the imitation method would only be exercised by clicking Tra
 
 **`np.array_equal`.** True when two arrays have the same shape and every element is equal. The warm-start test uses it both ways: equal for the copied genome, not equal for the mutated relative.
 
-**Chance accuracy.** With 16 menu items a random guess is right 1/16 of the time. Beating that on held-out data is the weakest possible proof of learning, chosen so the test passes on two tiny games in a few seconds.
+**Chance accuracy.** With 16 menu items a random guess is right 1/16 of the time. Beating that on held-out data is the weakest possible proof of learning, chosen so the test passes on two tiny games.
 
 **Running a subset.** `python -m pytest tests/test_imitation.py -k warm` runs the warm-start test alone.
 
@@ -52,7 +52,7 @@ Five direct checks of the static method, with no game involved.
 
 ### `test_imitation_learns_the_teacher_and_saves(tmp_path)`
 
-**Setup.** `ImitationTrainer(small(), ImitationConfig(demonstration_games=2, epochs=6, validation_games=1, learners_per_game=4, seed=0))`. Two teacher games give a few thousand demonstrations, 20 percent held out. Each epoch plays one greedy validation game with the student driving four tributes. `history = trainer.run()`.
+**Setup.** `ImitationTrainer(small(), ImitationConfig(demonstration_games=2, epochs=6, validation_games=1, learners_per_game=4, seed=0))`. Two teacher games give a few thousand demonstrations, 20 percent held out. Each epoch plays one greedy validation game with the student driving four tributes on slots `[0, 6, 12, 18]`. `history = trainer.run()`. This is the slowest test in the suite, about 16 seconds: six epochs over the demonstrations with the default `(64, 32)` network, six validation games, and a showcase recording each epoch.
 
 **`assert len(history) == 6`.** One `ImitationStats` per epoch.
 
@@ -64,7 +64,7 @@ Five direct checks of the static method, with no game involved.
 
 **`assert trainer.champion.size == trainer.policy.parameter_count`.** The champion is the best-validation-loss genome and must be the full policy, 5872 numbers for the default architecture.
 
-**`folder = save_run(trainer, "imitation", "test_im", tmp_path)`.** The run folder.
+**`folder = save_run(trainer, "imitation", "test_im", tmp_path)`.** The run folder: `config.json`, `history.json`, `learning.json` (the unified rows every method shares), `events.txt`, `champion.json` and `plots/`.
 
 **`assert (folder / "plots" / "accuracy.png").exists() and (folder / "champion.json").exists()`.** `accuracy.png` is written only on the imitation branch of `training_run_plots`, so this checks that `save_run` passed the method through. `champion.json` is written because `trainer.champion` is not `None` and `save_champion` exists on the imitation trainer.
 
@@ -138,9 +138,18 @@ def test_student_warm_start():
     assert np.array_equal(second.policy.genome(), first.champion)
 ```
 
+**5. Learning from winners only.** `winners_top` keeps only the decisions of tributes that placed that well, so fewer demonstrations come out of the same games.
+
+```python
+def test_winners_top_keeps_fewer_demonstrations():
+    everyone = ImitationTrainer(small(), ImitationConfig(demonstration_games=1, seed=0))
+    winners = ImitationTrainer(small(), ImitationConfig(demonstration_games=1, seed=0, winners_top=3))
+    assert winners.collect() < everyone.collect()
+```
+
 ## Gotchas
 
-**The tests play real games.** Two demonstration games plus six validation games on a 50 by 50 map take a few seconds, mostly in the games rather than the gradient steps. Keep `demonstration_games` and `epochs` small in new tests.
+**The tests play real games.** Two demonstration games plus six validation games on a 50 by 50 map, with a showcase recording per epoch, take about 16 seconds. Keep `demonstration_games` and `epochs` small in new tests, and set `record_showcase=False` when the feed is not under test.
 
 **`validation_games=0` does not switch off validation loss.** The held-out demonstrations are still scored every epoch, so `champion` is still chosen by validation loss. Only the greedy games, telemetry and showcase are skipped.
 

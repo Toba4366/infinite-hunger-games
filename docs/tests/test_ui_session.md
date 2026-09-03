@@ -9,7 +9,7 @@ The dashboard (`python -m hunger_games ui`) is split so that the interesting log
 
 The first test drives the painter: brush, rectangle stamp, circular carve, every preset, and the coverage summary. The second walks through a whole dashboard session: edit loot and a podium, rename a tribute, start a game, play it at high speed, finish it, read the event log, scrub, and then save and reload the scenario, the replay and the config into a second session. The third starts genetic training in a background thread, waits for it, hands the champion genome to two tributes, and proves the next game really uses it.
 
-If any of this broke, the dashboard would still open, and the failure would only show up as a button that does nothing or a wrong picture. These tests catch that in under a second.
+If any of this broke, the dashboard would still open, and the failure would only show up as a button that does nothing or a wrong picture. These tests catch that in about two seconds.
 
 ## Concepts you need
 
@@ -91,19 +91,19 @@ If any of this broke, the dashboard would still open, and the failure would only
 
 **Setup.** `Session(SimulationConfig(seed=5, width=40, height=40, max_days=3))`, the smallest and shortest game in the file.
 
-**`session.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=1, rounds_per_generation=1, seed=0))`.** The second argument, `method`, defaults to `"genetic"`, so this builds a `GeneticTrainer` on the painted map and starts a daemon thread running `trainer.run`. One generation, one round, 24 genomes: one evaluation game, plus the trainer's default two validation games.
+**`session.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=1, rounds_per_generation=1, seed=0))`.** The second argument, `method`, defaults to `"genetic"`, so this builds a `GeneticTrainer` on the painted map, with a config copy whose `num_players` is the roster's 24. It then starts a daemon thread running the session's own loop, which calls `trainer.step(progress)` until `learning_history` holds `generations` entries (here 1) or `stop()` is called. The trainer's default `opponents="voting"` means the one generation plays 24 games, one per genome, each with the genome's six copies against 18 voting tributes, plus the default two validation games for the champion. About 1.7 seconds.
 
-**`session._training_thread.join(timeout=60)`.** Wait for the thread. Sixty seconds is a generous ceiling; it actually takes well under a second.
+**`session._training_thread.join(timeout=60)`.** Wait for the thread. Sixty seconds is a generous ceiling.
 
 **`assert not session.training_running`.** The thread finished.
 
 **`assert len(session.training_history()) == 1`.** One `GenerationStats`.
 
-**`assert session.give_champion([0, 1]) == 2`.** The champion genome is written into the specs for tributes 0 and 1, their `brain_name` is set to the trained kind, and the method returns how many it touched.
+**`assert session.give_champion([0, 1]) == 2`.** The champion genome is written into the specs for tributes 0 and 1 as a plain list, their `brain_name` is set to the trained kind (the genetic trainer's `brain_name`, here `"voting"`), and the method returns how many it touched.
 
 **`assert session.tribute(0).genome is not None and session.tribute(2).genome is None`.** Only the named tributes were changed.
 
-**`session.new_game()` then `assert session.game.players[0].brain.name == "voting"`.** The next game builds tribute 0's brain from the spec's `brain_name`, which `give_champion` set to the trained kind.
+**`session.new_game()` then `assert session.game.players[0].brain.name == "voting"`.** The next game builds tribute 0's brain from the spec's `brain_name` through `Game._make_brain`, which `give_champion` set to the trained kind.
 
 **`assert np.allclose(session.game.players[0].brain.genome(), session.trainer.champion)`.** The brain in the running game carries the champion's genes. This is the whole point of the Train tab: evolve, hand over, watch.
 
@@ -160,6 +160,22 @@ def test_session_reinforce_training():
     assert session.tribute(0).brain_name == "neural"
 ```
 
+**5. Pause holds the loop between iterations.**
+
+```python
+import time
+
+def test_pause_stops_progress():
+    session = Session(SimulationConfig(seed=5, width=40, height=40, max_days=3))
+    session.pause_training(True)
+    session.start_training(TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=0, seed=0))
+    time.sleep(0.5)
+    assert session.training_running and session.training_history() == []
+    session.pause_training(False)
+    session._training_thread.join(timeout=60)
+    assert len(session.training_history()) == 2
+```
+
 ## Gotchas
 
 **`(x, y)` in, `[y, x]` out.** `painter.paint(10, 10, ...)` and `painter.terrain[10, 13]` look similar but the second is row 10, column 13. Mixing them up makes a test pass on square symmetric shapes and fail on real maps.
@@ -176,6 +192,8 @@ def test_session_reinforce_training():
 
 **Training runs on a daemon thread.** If a test forgets to `join`, pytest may finish while the thread is still working, and assertions about `training_history()` become flaky. Always join or poll `training_running`.
 
-**`give_champion` also changes `config.neural`.** For a neural champion the architecture must match, so the session copies the trainer's neural config into its own. With a voting champion this is harmless. For a REINFORCE trainer the brain kind is always `"neural"`.
+**The session drives the trainer, not `trainer.run()`.** `start_training` calls `trainer.step()` in its own loop so it can pause between iterations and stop on `_stop`. `trainer.history` still fills up one entry per step, so `training_history()` works the same way for every method.
+
+**`give_champion` also changes `config.neural`.** For a neural champion the architecture must match, so the session copies the trainer's neural config into its own. With a voting champion this is harmless. The brain kind it writes depends on the method: `"neat"` for a NEAT trainer, the genetic trainer's `brain_name` for genetic, and `"neural"` for imitation, REINFORCE and PPO. A NEAT champion is stored as a dictionary, every other kind as a list.
 
 **No Dear PyGui needed.** Neither `painter.py` nor `session.py` imports it. `renderer.py` is imported for GIF export, so matplotlib is loaded, but no window is opened.

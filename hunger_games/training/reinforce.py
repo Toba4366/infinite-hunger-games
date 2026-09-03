@@ -64,6 +64,16 @@ from hunger_games.research.telemetry import BehaviorTelemetry
 # Custom setups.
 from hunger_games.scenario import Scenario
 
+# The shared training pieces.
+from hunger_games.training.common import (
+    Curriculum,
+    EventLog,
+    IterationStats,
+    LearnerSpec,
+    build_learner,
+    learner_ids,
+)
+
 
 @dataclass
 class RLConfig:
@@ -143,7 +153,7 @@ class EpochStats:
 def play_rl_episode(
     config: SimulationConfig,
     scenario: Scenario | None,
-    genome: np.ndarray,
+    genome,
     learner_ids: list[int],
     seed: int,
     greedy: bool,
@@ -157,16 +167,16 @@ def play_rl_episode(
     # A config copy with this episode's seed.
     game_config = SimulationConfig(**{**config.to_dict_raw(), "seed": seed})
     # The learners' brains, kept so we can read their last choice.
-    learners: dict[int, NeuralBrain] = {}
+    learners: dict[int, Brain] = {}
+    # The learner description: a flat neural genome (the common case) or a LearnerSpec of any kind.
+    spec = genome if isinstance(genome, LearnerSpec) else LearnerSpec("neural", genome, game_config.neural)
 
     # Brain factory: learners get the policy, everyone else the config's brain.
     def factory(index: int, rng: np.random.Generator) -> Brain:
         # A learner.
         if index in learner_ids:
             # Greedy validation uses chaos 0 (argmax); training samples at temperature 1.
-            brain = NeuralBrain(chaos=0.0 if greedy else 1.0, config=game_config.neural, rng=rng)
-            # Load the policy.
-            brain.set_genome(genome)
+            brain = build_learner(spec, 0.0 if greedy else 1.0, rng)
             # Remember it.
             learners[index] = brain
             return brain
@@ -217,8 +227,8 @@ def play_rl_episode(
         )
         # The vector and the index (decide_index stored the probabilities; the index is recovered from the action).
         vectors[player.player_id].append(perception.to_vector())
-        # The chosen index.
-        indices[player.player_id].append(learners[player.player_id].last_index)
+        # The chosen index (every learner brain records it).
+        indices[player.player_id].append(getattr(learners[player.player_id], "last_index", 0))
         # A placeholder reward, filled in at the end of the tick.
         rewards[player.player_id].append(0.0)
 
@@ -304,18 +314,30 @@ def _run_episode_job(args: tuple) -> dict:
 class ReinforceTrainer:
     """Trains a NeuralBrain policy by REINFORCE with a learned value baseline."""
 
+    # Label for run folders and champion files (PPO overrides it).
+    method = "reinforce"
+
     def __init__(
         self,
         config: SimulationConfig,
         rl: RLConfig,
         scenario: Scenario | None = None,
         initial_genome: np.ndarray | None = None,
+        curriculum: Curriculum | None = None,
     ) -> None:
         """Create a fresh policy and value network, or start the policy from a given genome (a warm start)."""
         # Settings.
         self.config = config
         # Learner settings.
         self.rl = rl
+        # The curriculum (opponents grow as the learner improves), if any.
+        self.curriculum = curriculum
+        # The event monitor.
+        self.events = EventLog()
+        # The unified per-iteration history every method shares.
+        self.learning_history: list[IterationStats] = []
+        # The best mean score seen (for "new record" events).
+        self.best_mean_score = -np.inf
         # Optional custom setup.
         self.scenario = scenario
         # The trainer's own randomness.
@@ -354,10 +376,90 @@ class ReinforceTrainer:
 
     def _learner_ids(self) -> list[int]:
         """Which tribute slots the policy drives (spread across the roster)."""
-        # How many learners fit.
-        count = min(self.rl.learners_per_game, self.config.num_players)
-        # Evenly spaced slots so learners are not all neighbours on the podiums.
-        return [int(i * self.config.num_players / count) for i in range(count)]
+        # Shared rule.
+        return learner_ids(self.config.num_players, self.rl.learners_per_game)
+
+    def learner_spec(self) -> LearnerSpec:
+        """The current policy as something a worker can rebuild."""
+        # Neural.
+        return LearnerSpec("neural", self.policy.genome().copy(), self.config.neural)
+
+    def champion_spec(self) -> LearnerSpec:
+        """The best policy so far."""
+        # Neural.
+        return LearnerSpec("neural", np.asarray(self.champion, dtype=float), self.config.neural)
+
+    def _apply_curriculum(self) -> None:
+        """Size the roster for the current curriculum stage: learner copies plus that stage's opponents."""
+        # Nothing to do without a curriculum.
+        if self.curriculum is None:
+            return
+        # Learners plus opponents.
+        players = min(self.rl.learners_per_game, 24) + self.curriculum.opponents
+        # Apply.
+        self.config = SimulationConfig(**{**self.config.to_dict_raw(), "num_players": players})
+
+    def _record_iteration(
+        self,
+        scores: list[float],
+        entropy: float,
+        mean_length: float,
+        win_rate: float,
+        val_score: float,
+        seconds: float,
+        extra: dict,
+        telemetry: dict,
+        showcase,
+    ) -> IterationStats:
+        """Append a unified IterationStats, log events, and advance the curriculum."""
+        # Mean.
+        mean_score = float(np.mean(scores)) if scores else 0.0
+        # Stage info.
+        stage = self.curriculum.stage if self.curriculum is not None else 0
+        opponents = self.curriculum.opponents if self.curriculum is not None else self.config.num_players - 1
+        # The stats.
+        stats = IterationStats(
+            iteration=len(self.learning_history),
+            scores=list(scores),
+            mean_score=mean_score,
+            best_score=float(max(scores)) if scores else 0.0,
+            entropy=entropy,
+            mean_length=mean_length,
+            win_rate=win_rate,
+            val_score=val_score,
+            seconds=seconds,
+            cumulative_seconds=(self.learning_history[-1].cumulative_seconds if self.learning_history else 0.0)
+            + seconds,
+            stage=stage,
+            opponents=opponents,
+            extra=extra,
+            learner=self.learner_spec().genome,
+            telemetry=telemetry,
+            showcase=showcase,
+        )
+        # Keep.
+        self.learning_history.append(stats)
+        # Events.
+        self.events.add(
+            "rollout",
+            f"iteration {stats.iteration}: mean score {mean_score:.2f}, length {mean_length:.0f} ticks, win rate {win_rate:.2f}",
+        )
+        if mean_score > self.best_mean_score:
+            self.best_mean_score = mean_score
+            self.events.add("record", f"new best mean score {mean_score:.2f}")
+        # Curriculum.
+        if self.curriculum is not None and self.curriculum.observe(mean_score):
+            self.events.add(
+                "curriculum", f"promoted to stage {self.curriculum.stage}: {self.curriculum.opponents} opponents"
+            )
+        # Done.
+        return stats
+
+    def step(self, on_progress: Callable[[int, int], None] | None = None) -> IterationStats:
+        """One iteration in the shared shape (every trainer has this method)."""
+        # Run an epoch and hand back the unified stats appended for it.
+        self.step_epoch(on_progress)
+        return self.learning_history[-1]
 
     def _collect(
         self,
@@ -367,13 +469,13 @@ class ReinforceTrainer:
         record_first: bool = False,
     ) -> list[dict]:
         """Play one episode per seed, in parallel if asked; optionally record the first one."""
-        # The policy as a genome.
-        genome = self.policy.genome()
+        # The policy as a learner spec.
+        spec = self.learner_spec()
         # Learners.
         learners = self._learner_ids()
         # Jobs (only the first records, when asked).
         jobs = [
-            (self.config, self.scenario, genome, learners, seed, greedy, record_first and index == 0)
+            (self.config, self.scenario, spec, learners, seed, greedy, record_first and index == 0)
             for index, seed in enumerate(seeds)
         ]
         # Results.
@@ -518,6 +620,8 @@ class ReinforceTrainer:
             self._started = time.time()
         # Start.
         started = time.time()
+        # Size the roster for the curriculum stage.
+        self._apply_curriculum()
         # Training seeds.
         seeds = [int(self.rng.integers(2**31 - 1)) for _ in range(self.rl.episodes_per_epoch)]
         # Collect, recording the first game for the training feed.
@@ -563,6 +667,19 @@ class ReinforceTrainer:
         self.history.append(stats)
         # Count.
         self.epoch += 1
+        # The unified record.
+        scores = [o["return"] for episode in episodes for o in episode["outcomes"].values()]
+        self._record_iteration(
+            scores,
+            entropy,
+            train_survival,
+            win_rate,
+            val_return,
+            stats.seconds,
+            {"policy_loss": policy_loss, "value_loss": value_loss},
+            telemetry,
+            stats.showcase,
+        )
         # Done.
         return stats
 
@@ -615,7 +732,7 @@ class ReinforceTrainer:
             "value_hidden": list(self.rl.value_hidden),
             "fitness": float(self.best_val_return) if np.isfinite(self.best_val_return) else 0.0,
             "epochs": len(self.history),
-            "method": "reinforce",
+            "method": self.method,
         }
         # Write.
         Path(path).write_text(json.dumps(data))

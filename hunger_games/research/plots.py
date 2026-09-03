@@ -503,7 +503,9 @@ def curve_gif(
     lines = {label: ax.plot([], [], marker=".", label=label)[0] for label in series}
     # Fixed axes so the view does not jump.
     all_values = [v for ys in series.values() for v in ys] or [0.0, 1.0]
-    ax.set_xlim(min(xs) if len(xs) else 0, max(xs) if len(xs) else 1)
+    # A single point would make the limits identical, so widen them a little.
+    low_x, high_x = (min(xs), max(xs)) if len(xs) else (0, 1)
+    ax.set_xlim(low_x - 0.5 if low_x == high_x else low_x, high_x + 0.5 if low_x == high_x else high_x)
     ax.set_ylim(
         min(all_values) - 0.05 * (max(all_values) - min(all_values) + 1e-9),
         max(all_values) + 0.05 * (max(all_values) - min(all_values) + 1e-9),
@@ -533,6 +535,112 @@ def curve_gif(
     return Path(path)
 
 
+# ================================================== comparison helpers
+
+
+def overlay_curves(
+    series: dict[str, tuple[list, list]], title: str, xlabel: str, ylabel: str, path: str | Path
+) -> Path:
+    """Several (xs, ys) lines on one chart, one per method or variant."""
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    for label, (xs, ys) in series.items():
+        if len(xs):
+            ax.plot(xs, ys, marker=".", label=label)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if series:
+        ax.legend(fontsize=8)
+    return _save(fig, path)
+
+
+def bars(labels: list[str], values: list[float], title: str, ylabel: str, path: str | Path) -> Path:
+    """A simple bar chart, one bar per label."""
+    fig, ax = plt.subplots(figsize=(7.5, 4.2))
+    ax.bar(labels, values, color="slateblue")
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.tick_params(axis="x", rotation=30)
+    return _save(fig, path)
+
+
+# ==================================================== shared learning curves
+
+
+def learning_curve_plots(learning_rows: list[dict], folder: str | Path) -> list[Path]:
+    """The curves every method shares: score, entropy, game length, win rate, time, curriculum."""
+    # Nothing.
+    if not learning_rows:
+        return []
+    folder = Path(folder)
+    xs = [r["iteration"] for r in learning_rows]
+    return [
+        curves(
+            xs,
+            {
+                "mean score": [r["mean_score"] for r in learning_rows],
+                "best score": [r["best_score"] for r in learning_rows],
+                "validation score": [r["val_score"] for r in learning_rows],
+            },
+            "Score per iteration",
+            "iteration",
+            "score (episode return)",
+            folder / "score.png",
+        ),
+        curves(
+            xs,
+            {"entropy": [r["entropy"] for r in learning_rows]},
+            "Policy entropy",
+            "iteration",
+            "nats",
+            folder / "entropy_shared.png",
+        ),
+        curves(
+            xs,
+            {"mean game length": [r["mean_length"] for r in learning_rows]},
+            "Average game length (learner survival)",
+            "iteration",
+            "ticks",
+            folder / "game_length.png",
+        ),
+        curves(
+            xs,
+            {"win rate": [r["win_rate"] for r in learning_rows]},
+            "Win rate",
+            "iteration",
+            "rate",
+            folder / "win_rate_shared.png",
+        ),
+        curves(
+            [r["cumulative_seconds"] for r in learning_rows],
+            {"mean score": [r["mean_score"] for r in learning_rows]},
+            "Score against wall-clock time",
+            "seconds",
+            "score",
+            folder / "score_vs_time.png",
+        ),
+        curves(
+            xs,
+            {"opponents": [r["opponents"] for r in learning_rows]},
+            "Curriculum: opponents per iteration",
+            "iteration",
+            "opponents",
+            folder / "curriculum.png",
+        ),
+        curve_gif(
+            xs,
+            {
+                "mean score": [r["mean_score"] for r in learning_rows],
+                "validation": [r["val_score"] for r in learning_rows],
+            },
+            "Score per iteration",
+            "iteration",
+            "score",
+            folder / "score.gif",
+        ),
+    ]
+
+
 # ============================================================== bundles
 
 
@@ -546,10 +654,38 @@ def training_run_plots(history_rows: list[dict], summaries: list[dict], folder: 
     if not history_rows:
         return written
     # X axis.
-    step = "generation" if method == "genetic" else "epoch"
+    step = "generation" if method == "genetic" else ("iteration" if method == "neat" else "epoch")
     xs = [row[step] for row in history_rows]
     # Performance curves.
-    if method == "imitation":
+    if method == "neat":
+        written.append(
+            curves(
+                xs,
+                {
+                    "species": [r.get("extra_species", 0) for r in history_rows],
+                    "hidden nodes": [r.get("extra_hidden_nodes", 0) for r in history_rows],
+                },
+                "NEAT structure",
+                step,
+                "count",
+                folder / "neat_structure.png",
+            )
+        )
+        written.append(
+            curves(
+                xs,
+                {
+                    "best": [r["best_score"] for r in history_rows],
+                    "mean": [r["mean_score"] for r in history_rows],
+                    "validation": [r["val_score"] for r in history_rows],
+                },
+                "Fitness by generation",
+                step,
+                "score",
+                folder / "fitness.png",
+            )
+        )
+    elif method == "imitation":
         written.append(
             curves(
                 xs,

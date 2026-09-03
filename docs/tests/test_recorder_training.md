@@ -1,15 +1,15 @@
 # `test_recorder_training.py`
 
 **Source:** [tests/test_recorder_training.py](../../tests/test_recorder_training.py)
-**Tests:** [../recorder.md](../recorder.md) (`Recorder`, `Recording`, `Frame`), [../training/genetic.md](../training/genetic.md) (`GeneticTrainer`, `TrainingConfig`, `GenerationStats`), [../game.md](../game.md) (`Game`), [../config.md](../config.md) (`SimulationConfig`), [../brain/voting.md](../brain/voting.md) and [../brain/neural.md](../brain/neural.md) (the genomes being evolved)
+**Tests:** [../recorder.md](../recorder.md) (`Recorder`, `Recording`, `Frame`), [../training/genetic.md](../training/genetic.md) (`GeneticTrainer`, `TrainingConfig`, `GenerationStats`), through it [../training/reinforce.md](../training/reinforce.md) (`play_rl_episode`, which plays the learner-versus-voting games) and [../config.md](../config.md) (`RewardConfig`, the score), [../game.md](../game.md) (`Game`), [../config.md](../config.md) (`SimulationConfig`), [../brain/voting.md](../brain/voting.md) and [../brain/neural.md](../brain/neural.md) (the genomes being evolved)
 
 ## Purpose
 
-Two features share this file because both wrap a `Game` and drive it from outside. The `Recorder` steps a game and copies its state after every tick into a `Frame`, so the dashboard can scrub back and forth and export GIFs. The `GeneticTrainer` plays populations of genomes against each other and breeds the winners, which is how the dashboard's Train tab makes brains better.
+Two features share this file because both wrap a `Game` and drive it from outside. The `Recorder` steps a game and copies its state after every tick into a `Frame`, so the dashboard can scrub back and forth and export GIFs. The `GeneticTrainer` scores a population of genomes by playing games and breeds the best, which is one of the ways the dashboard's Train tab makes brains better.
 
-The first test records a whole game and proves the bookkeeping: one frame per tick plus the starting frame, every elimination landing on exactly one frame, the result filled in, and a pickle round trip that preserves positions and the roster. The second runs two generations of voting-brain evolution and checks the statistics are sane, the champion has the right shape, and the champion file round-trips through JSON. The third evolves neural brains with a population that does not divide evenly into games, proving the padding logic scores every genome.
+The first test records a whole game and proves the bookkeeping: one frame per tick plus the starting frame, every elimination landing on exactly one frame, the result filled in, and a pickle round trip that preserves positions and the roster. The second runs two generations of voting-brain evolution and checks the statistics are sane, the champion has the right shape, and the champion file round-trips through JSON. The third evolves neural brains with a population of 30 and checks that every genome got a finite score, whatever the population size.
 
-Both features are only exercised through the dashboard in normal use, so without these tests a broken recorder or trainer would only be noticed by someone clicking around a window. The trainer's newer features, validation games, telemetry and run folders, are covered in [test_research.md](test_research.md).
+Both features are only exercised through the dashboard in normal use, so without these tests a broken recorder or trainer would only be noticed by someone clicking around a window. The trainer's other features, validation games, telemetry and run folders, are covered in [test_research.md](test_research.md).
 
 ## Concepts you need
 
@@ -21,9 +21,11 @@ Both features are only exercised through the dashboard in normal use, so without
 
 **Generator expressions inside `sum` and `all`.** `sum(len(f.eliminations) for f in recording.frames)` adds up one number per frame without building a list. `all(... for f in frames)` stops at the first `False`.
 
-**`np.isfinite`.** True for ordinary numbers, False for `inf` and `nan`. A fitness of `nan` would silently break sorting, so the test rules it out.
+**`np.isfinite`.** True for ordinary numbers, False for `inf` and `nan`. On an array it returns an array of booleans, and `.all()` asks whether every one is True. A fitness of `nan` would silently break sorting, so both trainer tests rule it out.
 
-**Chained comparisons.** `a >= b >= c` is Python for `a >= b and b >= c`. The trainer test uses it to check best, mean and worst in one line.
+**Chained comparisons.** `a >= b >= c` is Python for `a >= b and b >= c`. The second test uses it to check best, mean and worst in one line.
+
+**Fitness is an episode return.** By default the trainer's `opponents` setting is `"voting"`: each genome drives a few learner copies in a game against the video's voting brain, and its score is the total reward those copies collected under `RewardConfig` (see [../config.md](../config.md)). Rewards include penalties (a death costs 3, each point of health lost costs 2), so a score can be negative. The older `"self"` mode, where the population plays itself and is scored by placing with `fitness_of`, still exists but is not the default.
 
 **Running a subset.** `python -m pytest tests/test_recorder_training.py -k trainer` runs the two trainer tests.
 
@@ -36,7 +38,7 @@ def small() -> SimulationConfig:
     return SimulationConfig(seed=7, width=50, height=50, max_days=4)
 ```
 
-A 50 by 50 arena capped at 4 days, which is 96 ticks. Games this size finish in well under a tenth of a second, so the trainer tests, which play several games each, stay fast. Seed 7 makes every game reproducible; the trainer draws its own game seeds from its own generator, but the config seed still fixes the arena used for the recorder test.
+A 50 by 50 arena capped at 4 days, which is 96 ticks. Games this size finish in about a tenth of a second, so the trainer tests, which play a few dozen games each, stay in the seconds. Seed 7 makes every game reproducible; the trainer draws its own game seeds from its own generator, but the config seed still fixes the arena used for the recorder test.
 
 ### `test_recorder_captures_every_tick_and_round_trips(tmp_path)`
 
@@ -44,7 +46,7 @@ A 50 by 50 arena capped at 4 days, which is 96 ticks. Games this size finish in 
 
 **`assert recording.length == game.tick + 1`.** With seed 7 the game reaches the 96-tick cap, so there are 97 frames: frame 0 plus one per tick. A failure would mean a tick was skipped or captured twice.
 
-**`assert sum(len(f.eliminations) for f in recording.frames) == len(game.eliminations)`.** `Recorder.capture` records only the eliminations that appeared since the previous capture, using `_eliminations_seen` as a cursor. Summing across frames must give the game's full list of 16 deaths: none dropped, none duplicated.
+**`assert sum(len(f.eliminations) for f in recording.frames) == len(game.eliminations)`.** `Recorder.capture` records only the eliminations that appeared since the previous capture, using `_eliminations_seen` as a cursor. Summing across frames must give the game's full list of deaths: none dropped, none duplicated.
 
 **`assert recording.result is not None and recording.result.ticks == game.tick`.** `Recorder.step` fills in `recording.result` when the game ends, and `record_all` fills it in as a fallback. The result's tick count must match the game's.
 
@@ -60,15 +62,17 @@ A 50 by 50 arena capped at 4 days, which is 96 ticks. Games this size finish in 
 
 ### `test_trainer_improves_or_holds_and_saves_a_champion(tmp_path)`
 
-**Setup.** `GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, seed=0))`. The population equals the default player count, so each round is exactly one evaluation game with no padding. The `TrainingConfig` defaults also switch on two validation games per generation (the generation's champion drives six tributes against the config's voting brain on seeds 90000 and 90001) and behaviour telemetry. `history = trainer.run()`.
+**Setup.** `GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, seed=0))`. Every other setting is the default: `opponents="voting"`, `learners_per_game=6`, two validation games per generation, telemetry and a showcase recording on. `history = trainer.run()`.
+
+**What one generation plays.** `step_generation` calls `evaluate_against_voting`. Every genome gets its own game per round: 24 genomes, one round, so 24 games. In each game the genome drives six learner copies on slots `0, 4, 8, 12, 16, 20` (`learner_ids(24, 6)` spreads them across the podiums) with chaos 0, and the other 18 tributes use the config's voting brain at chaos 0.5. `play_rl_episode` plays the game, and the genome's score is the mean episode return of its six copies. Then the generation's champion plays two validation games on seeds 90000 and 90001 the same way, and `val_fitness` is its mean return there. Only genome 0's first game is recorded as the showcase. That is 52 games across the two generations, about 5 seconds.
 
 **`assert len(history) == 2`.** One `GenerationStats` per generation.
 
-**`assert all(np.isfinite(s.best_fitness) and s.best_fitness >= s.mean_fitness >= s.worst_fitness for s in history)`.** Fitness is a real number, and the best is at least the mean, which is at least the worst. This catches a sign flip in `np.argsort(fitness)[::-1]`, which would swap best and worst. Fitness itself is `fitness_of`: a placing term from 0 to 1 plus `kills_weight` (0.05) per kill and `days_weight` (0.01) per day survived.
+**`assert all(np.isfinite(s.best_fitness) and s.best_fitness >= s.mean_fitness >= s.worst_fitness for s in history)`.** Fitness is a real number, and the best is at least the mean, which is at least the worst. This catches a sign flip in `np.argsort(fitness)[::-1]`, which would swap best and worst. Nothing here says fitness is positive: an episode return with a death penalty and damage penalties is often below zero for a fresh genome.
 
 **`assert trainer.champion.shape == (8,)`.** The voting brain has eight genes, so its genome is a length-8 vector. `trainer.champion` is the champion of whichever generation had the best fitness.
 
-**`trainer.save_champion(path); data = GeneticTrainer.load_champion(path)`.** The JSON round trip. The file holds the brain name, the neural config, the genome as a list, the best fitness and the generation count. `load_champion` turns the genome back into a numpy array and the neural config back into a `NeuralConfig`.
+**`trainer.save_champion(path); data = GeneticTrainer.load_champion(path)`.** The JSON round trip. The file holds the brain name, the neural config, the genome as a list, the best fitness and the generation count. `load_champion` turns a list genome back into a numpy array (a NEAT dictionary is left alone) and the neural config back into a `NeuralConfig`.
 
 **`assert data["brain_name"] == "voting"`.** The kind was saved.
 
@@ -80,11 +84,11 @@ The test name says "improves or holds" but no assertion compares generation 1 wi
 
 ### `test_trainer_handles_neural_genomes_and_padding()`
 
-**Setup.** `TrainingConfig(brain_name="neural", population_size=30, generations=1, rounds_per_generation=1, seed=1)` on the same small config. 30 genomes do not divide into games of 24, so `_make_jobs` pads the shuffled order with 18 random repeats to make two full games.
+**Setup.** `TrainingConfig(brain_name="neural", population_size=30, generations=1, rounds_per_generation=1, seed=1)` on the same small config. 30 does not divide by 24, which is where the "padding" in the name comes from: in `"self"` mode `_make_jobs` would pad the shuffled order with 18 random repeats to fill two games. In the default `"voting"` mode there is nothing to pad. Each of the 30 genomes plays its own game with six copies against 18 voting tributes, so the test now checks that a population of any size gets one score per genome. `trainer.run()` plays those 30 games plus two validation games, about 3 seconds.
 
-**`assert trainer.genome_size == trainer.champion.size`.** A default neural brain has 1088 parameters (50 inputs, one hidden layer of 16, 16 outputs: 800 + 16 + 256 + 16). The champion must be that long.
+**`assert trainer.genome_size == trainer.champion.size`.** A default neural brain has 5872 parameters: 50 inputs, hidden layers of 64 and 32, 16 outputs, so `50 * 64 + 64 + 64 * 32 + 32 + 32 * 16 + 16`. The champion must be that long.
 
-**`assert (trainer.fitness > 0).all() or (trainer.fitness >= 0).all()`.** Every genome has a fitness of at least zero. Because `fitness_of` returns a placing term from 0 to 1 plus non-negative bonuses, the second half of the `or` is always true, so this line really only checks that `fitness` is a numeric array of the right shape with no `nan` (a `nan` compares False to everything). The `> 0` half is a stricter version that passes when every genome earned at least something.
+**`assert np.isfinite(trainer.fitness).all() and len(trainer.fitness) == 30`.** Every genome has a finite score and nobody was skipped. `fitness` is `totals / np.maximum(counts, 1)`, so a genome that somehow played no game would score 0, not `nan`; the real guard is that `len` is 30 and no return was `inf` or `nan`. The assertion used to be `(fitness >= 0).all()`, which was true when fitness was a placing between 0 and 1. An episode return can be negative, so that check would now fail on an honest trainer, and finiteness is the right property.
 
 **`assert len(trainer.population) == 30`.** After breeding, the population is the same size: 3 elites (10 percent of 30) plus 27 children.
 
@@ -137,13 +141,13 @@ def test_stop_after_first_generation():
     assert len(trainer.history) == 1
 ```
 
-**5. Validation and telemetry can be switched off** for a faster, quieter trainer.
+**5. The old tournament still works.** With `opponents="self"` the population plays itself, `fitness_of` scores by placing, and padding really happens. Fitness is then never negative.
 
 ```python
-def test_trainer_without_validation():
-    trainer = GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=1, rounds_per_generation=1, validation_games=0, collect_telemetry=False, seed=0))
+def test_self_play_pads_and_scores_by_placing():
+    trainer = GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=30, generations=1, rounds_per_generation=1, validation_games=0, collect_telemetry=False, opponents="self", seed=0))
     stats = trainer.run()[0]
-    assert stats.val_fitness == 0.0 and stats.telemetry == {}
+    assert (trainer.fitness >= 0).all() and stats.val_fitness == 0.0 and stats.telemetry == {}
 ```
 
 ## Gotchas
@@ -154,10 +158,14 @@ def test_trainer_without_validation():
 
 **Pickle files are not portable across code changes.** A `.replay` written before a dataclass gained a field may fail to load. Regenerate rather than migrate.
 
-**Trainer seeds and config seeds are different generators.** `TrainingConfig.seed` drives population init, shuffling, breeding and per-game seeds. `SimulationConfig.seed` is overwritten for every evaluation game by `play_evaluation_game`, so it does not make training games repeatable on its own; the trainer seed does. Validation games use `validation_seed + i` instead, so they are the same every generation.
+**Trainer seeds and config seeds are different generators.** `TrainingConfig.seed` drives population init, shuffling, breeding and per-game seeds. `SimulationConfig.seed` is overwritten for every training game (by `play_rl_episode` in voting mode, `play_evaluation_game` in self mode), so it does not make training games repeatable on its own; the trainer seed does. Validation games use `validation_seed + i` instead, so they are the same every generation.
 
-**Padding double-counts.** With 30 genomes and 24 per game, 18 genomes play twice in one round. Their fitness is a mean over their games, so they are not favoured, but `counts` differs per genome.
+**Fitness can be negative.** A score is a sum of rewards: 0.01 per tick alive, 1 per kill, up to 2 for placing and 5 for winning, minus 3 for dying and 2 per point of health lost. A genome whose copies all die early scores below zero. Anything that assumes `fitness >= 0` (a `sqrt`, a proportional selection) breaks.
 
-**Each generation plays more than the evaluation games.** With the defaults, two validation games and the telemetry bookkeeping run as well. That is why the two trainer tests take about 0.5 to 0.7 seconds each rather than the 0.2 seconds the evaluation games alone would need. Set `validation_games=0` and `collect_telemetry=False` when speed matters.
+**Padding only happens in self mode.** `_make_jobs` and its random repeats are used by `evaluate`, which `step_generation` only calls when `opponents == "self"`. In voting mode every genome plays exactly `rounds_per_generation` games, so `counts` is the same for everyone.
+
+**`collect_telemetry` is ignored in voting mode.** `play_rl_episode` always attaches telemetry for the learner slots, so `stats.telemetry` is filled whatever the flag says. The flag only matters for `play_evaluation_game` in self mode.
+
+**Each generation plays a game per genome.** With `population_size=24` that is 24 games plus the validation games, not the single game the old tournament needed. That is why the two trainer tests take about 5 and 3 seconds. Set `validation_games=0` or lower `population_size` when speed matters.
 
 **`workers` stays at 1 in these tests.** Multi-process evaluation works but needs the `__main__` guard on macOS, and pytest already runs in one process. See [../runner.md](../runner.md) for the spawn rules.

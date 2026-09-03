@@ -21,6 +21,8 @@ This file checks that each part works on its own and that they fit together. The
 
 **Run folders.** `make_run_dir(base, name)` creates `base/<name>_<timestamp>/plots`. Both `save_run` and `Sweep.run` use it, so the tests look for files inside the returned `Path`.
 
+**The default network.** `NeuralConfig` defaults to two hidden layers of 64 and 32. With the 50-number perception vector in and the 16-item menu out, that is `50 * 64 + 64 + 64 * 32 + 32 + 32 * 16 + 16`, which is 5872 parameters. Both trainers in this file build that network.
+
 **Running a subset.** `python -m pytest tests/test_research.py -k mlp` runs the two network tests.
 
 ## Walkthrough
@@ -32,7 +34,7 @@ def small() -> SimulationConfig:
     return SimulationConfig(seed=7, width=50, height=50, max_days=4)
 ```
 
-The same helper as in `test_recorder_training.py`: a 50 by 50 arena capped at 96 ticks. With seed 7 a plain game runs to the cap with 16 eliminations, which gives the telemetry something to count.
+The same helper as in `test_recorder_training.py`: a 50 by 50 arena capped at 96 ticks. With seed 7 a plain game runs to the cap with a good number of eliminations, which gives the telemetry something to count.
 
 ### `test_mlp_backward_matches_finite_differences()`
 
@@ -72,31 +74,31 @@ The same helper as in `test_recorder_training.py`: a 50 by 50 arena capped at 96
 
 ### `test_reinforce_trainer_runs_and_saves(tmp_path)`
 
-**Setup.** `ReinforceTrainer(small(), RLConfig(epochs=2, episodes_per_epoch=1, learners_per_game=4, validation_games=1, seed=0))`. Each epoch plays one training game with four learner tributes (slots 0, 6, 12 and 18, spread across the podiums) and one greedy validation game on seed 90000. `history = trainer.run()`.
+**Setup.** `ReinforceTrainer(small(), RLConfig(epochs=2, episodes_per_epoch=1, learners_per_game=4, validation_games=1, seed=0))`. Each epoch plays one training game with four learner tributes (slots 0, 6, 12 and 18, spread across the podiums) and one greedy validation game on seed 90000. `history = trainer.run()`. About 3 seconds, most of it drawing charts.
 
 **`assert len(history) == 2`.** One `EpochStats` per epoch.
 
-**The key loop.** `history[-1].to_row()` drops the genome and telemetry and keeps the numbers. For each of `policy_loss`, `value_loss`, `entropy`, `train_return`, `val_return`, `train_survival`, `win_rate`, `seconds` and `cumulative_seconds`, the key must exist and `np.isfinite` must be true. A `nan` here usually means a division by zero in `_update` when no learner made a decision, or a `log(0)` in the entropy.
+**The key loop.** `history[-1].to_row()` drops the genome, telemetry and showcase and keeps the numbers. For each of `policy_loss`, `value_loss`, `entropy`, `train_return`, `val_return`, `train_survival`, `win_rate`, `seconds` and `cumulative_seconds`, the key must exist and `np.isfinite` must be true. A `nan` here usually means a division by zero in `_update` when no learner made a decision, or a `log(0)` in the entropy.
 
 **`assert 0.0 < history[-1].entropy <= np.log(16) + 1e-6`.** Entropy is measured in nats over the 16-item action menu. The maximum for 16 equally likely items is `log(16)`, about 2.77. A fresh policy sits near that; it must be above zero because the policy samples at temperature 1 and never collapses in two epochs.
 
-**`assert trainer.champion.size == trainer.policy.parameter_count`.** The champion is the genome with the best validation return and must be the full 1088-number policy (50 inputs, 16 hidden, 16 outputs).
+**`assert trainer.champion.size == trainer.policy.parameter_count`.** The champion is the genome with the best validation return and must be the full 5872-number policy (50 inputs, hidden layers of 64 and 32, 16 outputs).
 
-**`folder = save_run(trainer, "reinforce", "test_rl", tmp_path)`.** Writes `config.json`, `history.json`, `champion.json` (via `save_policy`, which also stores the value network) and `plots/`. The test checks `history.json` and `champion.json` exist, that at least 10 PNGs landed in `plots/` (reward, losses, entropy, survival, win and kill rate, timing, three over-training charts and the twelve behaviour charts), and that `reward.gif`, the growing-curve animation, exists.
+**`folder = save_run(trainer, "reinforce", "test_rl", tmp_path)`.** Writes `config.json`, `history.json`, `learning.json` (the unified per-iteration rows every method shares), `events.txt` (the trainer's event log), `champion.json` (via `save_policy`, which also stores the value network) and `plots/`. The test checks `history.json` and `champion.json` exist, that at least 10 PNGs landed in `plots/`, and that `reward.gif`, the growing-curve animation, exists. In fact 27 PNGs are written: the six REINFORCE charts (reward, losses, entropy, survival, win and kill rate, timing), three over-training behaviour charts, the twelve behaviour charts for the last epoch, and the six shared learning curves from `learning_curve_plots` (score, entropy, game length, win rate, score against time, curriculum), plus `score.gif`.
 
 **Why two epochs.** The `over training` charts need at least two points to draw a line, and `previous` genome comparisons need two entries. Two is the smallest history that exercises everything.
 
 ### `test_genetic_trainer_validation_telemetry_and_run_folder(tmp_path)`
 
-**Setup.** `GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=1, seed=0))`. Eight-gene voting genomes, one evaluation game per generation, plus one validation game where the champion drives six tributes against the config's default brain.
+**Setup.** `GeneticTrainer(small(), TrainingConfig(brain_name="voting", population_size=24, generations=2, rounds_per_generation=1, validation_games=1, seed=0))`. Eight-gene voting genomes. The default `opponents="voting"` means each generation plays one game per genome, 24 in all, with the genome driving six copies against 18 voting tributes and scoring its copies' mean episode return. Then the champion plays one validation game on seed 90000 the same way. About 7 seconds for the 50 games and the charts.
 
-**`assert all("val_fitness" in row and "cumulative_seconds" in row for row in rows)`.** `history_rows()` includes the two newer columns. The run-folder plots read `val_fitness` for the validation line, so a missing key would crash `training_run_plots`.
+**`assert all("val_fitness" in row and "cumulative_seconds" in row for row in rows)`.** `history_rows()` includes both columns. The run-folder plots read `val_fitness` for the validation line, so a missing key would crash `training_run_plots`.
 
-**`assert trainer.history[-1].telemetry["games"] >= 1`.** `collect_telemetry` defaults to `True`, so each evaluation game returns a summary and the generation merges them. A failure would mean `play_evaluation_game` stopped attaching telemetry.
+**`assert trainer.history[-1].telemetry["games"] >= 1`.** `play_rl_episode` attaches telemetry to every training game for the learner slots, and the generation merges the 24 summaries, so `games` is 24. A failure would mean `evaluate_against_voting` stopped keeping the telemetry.
 
 **`assert trainer.previous_champion() is not None`.** With two generations there is a generation before the latest. The dashboard uses this to highlight which genes changed.
 
-**`folder = save_run(trainer, "genetic", "test_ga", tmp_path)`.** For the genetic method the plots are `fitness.png` (best, mean and validation lines) and `fitness.gif`. Both must exist.
+**`folder = save_run(trainer, "genetic", "test_ga", tmp_path)`.** For the genetic method the method-specific plots are `fitness.png` (best, mean and validation lines) and `fitness.gif`. Both must exist. The shared learning curves and `learning.json` are written too.
 
 ### `test_sweep_sets_nested_fields_and_writes_results(tmp_path)`
 
@@ -104,7 +106,7 @@ The same helper as in `test_recorder_training.py`: a 50 by 50 arena capped at 96
 
 **`assert config.terrain.water_threshold == 0.25`.** The original was deep-copied, not edited. Without the copy, every value in a sweep would leak into the next.
 
-**Setup.** `Sweep(config, SweepConfig(name="t", parameter="chaos", values=[0.0, 0.5], games_per_value=2, results_dir=tmp_path))`. Two values, two games each, all seeded from `seed=1000` so both values play the same games. `folder = sweep.run()`.
+**Setup.** `Sweep(config, SweepConfig(name="t", parameter="chaos", values=[0.0, 0.5], games_per_value=2, results_dir=tmp_path))`. Two values, two games each, all seeded from `seed=1000` so both values play the same games. `folder = sweep.run()`. About 2 seconds.
 
 **`assert (folder / "results.csv").exists() and (folder / "summary.json").exists()`.** The table and the JSON with telemetry.
 
@@ -164,11 +166,23 @@ def test_sweep_stops_after_first_value(tmp_path):
 
 **4. Gradient clipping caps the norm.** Feed `_clip` a huge gradient and check the combined length equals `max_grad_norm`.
 
+**5. The unified rows are complete.** Every trainer fills `learning_history` with the same `IterationStats` shape; `learning.json` is built from it.
+
+```python
+def test_learning_rows_share_one_shape(tmp_path):
+    trainer = ReinforceTrainer(small(), RLConfig(epochs=1, episodes_per_epoch=1, learners_per_game=4, validation_games=0, seed=0))
+    trainer.run()
+    row = trainer.learning_history[-1].to_row()
+    assert {"iteration", "mean_score", "best_score", "entropy", "mean_length", "win_rate", "val_score", "opponents"} <= set(row)
+    folder = save_run(trainer, "reinforce", "rows", tmp_path)
+    assert (folder / "learning.json").exists() and (folder / "plots" / "score.png").exists()
+```
+
 ## Gotchas
 
 **Always set `MPLBACKEND=Agg` or let `plots.py` do it.** `plots.py` calls `matplotlib.use("Agg")` at import, so these tests never open a window. Importing `hunger_games.renderer` first in the same process can pick a different backend; the run folder tests still work because `Agg` is forced before any figure is made.
 
-**These are the slow tests.** The three trainer and sweep tests take about three seconds each because every chart is a separate matplotlib figure and the GIFs are animated frame by frame. Keep `epochs`, `generations` and `games_per_value` at the minimum that still draws a line.
+**These are the slow tests.** The genetic run takes about 7 seconds, the REINFORCE run about 3 and the sweep about 2, because every chart is a separate matplotlib figure, the GIFs are animated frame by frame, and the genetic trainer plays a game per genome. Keep `epochs`, `generations`, `population_size` and `games_per_value` at the minimum that still draws a line.
 
 **The gradient passed to `backward` is already a mean.** If you write your own training loop and pass `2.0 * (out - target)` without the `/ out.size`, the gradients are `N` times too large. Adam mostly hides that, plain `apply_gradients` does not.
 
@@ -179,6 +193,8 @@ def test_sweep_stops_after_first_value(tmp_path):
 **Merging is not deduplication.** `merge([summary, summary])` doubles everything on purpose. Pass each game's summary once.
 
 **Entropy bounds depend on `MENU_SIZE`.** The `log(16)` in the REINFORCE test is the menu length from `brain/neural.py`. Adding a menu item changes the bound.
+
+**Genetic fitness is an episode return by default.** `val_fitness` and `best_fitness` are sums of rewards, not placings, so they can be negative and are on the same scale as the REINFORCE returns. Use `opponents="self"` for the old 0 to 1 placing score.
 
 **Run folders are timestamped to the second.** Two `save_run` calls in the same second with the same name share a folder because `mkdir(exist_ok=True)` does not complain. The tests use different names.
 
