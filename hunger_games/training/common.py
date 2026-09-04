@@ -198,13 +198,21 @@ class CurriculumConfig:
 
     @classmethod
     def lessons(
-        cls, win_threshold: float = 0.5, survival_threshold: float = 0.9, window: int = 5
+        cls,
+        win_threshold: float = 0.5,
+        survival_threshold: float = 0.6,
+        rules_survival_threshold: float = 0.3,
+        window: int = 5,
     ) -> "CurriculumConfig":
         """The lesson curriculum: survive first, then the arena rules, then win against a growing field, then generalise.
 
         Every cold start of the first full experiment died of thirst long before it met an opponent, so the first
-        two lessons have no voting opponents at all and are passed on survival, not wins. The last lesson keeps the
-        full field and varies the spawn layout, the arena shape and the rules from game to game.
+        two lessons have no voting opponents at all and are passed on survival, not wins. The survival bars are set
+        by measurement: six copies of the imitation champion (a teacher-quality policy) survive 65 to 78 percent of
+        a game with no opponents, no circle and no gifts, and 30 to 40 percent once the circle is on, because the
+        circle ends the game by driving the copies together and the copies fight each other. So "survive" asks for
+        0.6 and "survive the rules" for 0.3: as long as the teacher would. The last lesson keeps the full field and
+        varies the spawn layout, the arena shape and the rules from game to game.
         """
         # The rules every "win" lesson is played under.
         rules = {"gamemaker_enabled": True, "sponsors_enabled": True}
@@ -218,7 +226,7 @@ class CurriculumConfig:
                 threshold=survival_threshold,
             ),
             # Learn the arena: the circle shrinks and parachutes land.
-            Stage("survive the rules", 0, dict(rules), metric="survival", threshold=survival_threshold),
+            Stage("survive the rules", 0, dict(rules), metric="survival", threshold=rules_survival_threshold),
             # Learn to win against more and more voting tributes.
             Stage("beat 1", 1, dict(rules), threshold=win_threshold),
             Stage("beat 3", 3, dict(rules), threshold=win_threshold),

@@ -8,6 +8,14 @@ that way: whenever code, docs or defaults change, add a line under
 
 ## Unreleased
 
+### Changed
+- The lesson curriculum's survival bars are measured rather than guessed:
+  0.6 for "survive" and 0.3 for "survive the rules", the shares six copies
+  of the imitation champion reach (65 to 78 percent without the circle, 30
+  to 40 with it, because the circle ends the game by driving the copies
+  together). The first bar of 0.9 was unreachable even for the teacher and
+  would have held every variant on lesson 0 for its whole budget.
+
 ### Added
 - `run_comparison.py --cold-set` and `--warm-set [METHOD.]NAME=VALUE`: give the
   cold and the warm side of a comparison their own trainer settings, because

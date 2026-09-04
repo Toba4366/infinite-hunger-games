@@ -57,8 +57,8 @@ The zombie video starts its agent against one zombie and works up to sixteen. Ou
 
 | Lesson | Opponents | Rules | Promoted on |
 | --- | --- | --- | --- |
-| survive | 0 | circle off, sponsors off | surviving at least 90 percent of the game, averaged over 5 iterations |
-| survive the rules | 0 | circle on, sponsors on | the same |
+| survive | 0 | circle off, sponsors off | the copies surviving at least 60 percent of the game on average over 5 iterations (the imitation champion's copies manage 65 to 78) |
+| survive the rules | 0 | circle on, sponsors on | at least 30 percent (the circle ends the game by driving the copies together; the imitation champion manages 30 to 40) |
 | beat 1, beat 3, beat 7, beat 11, beat 23 | 1, 3, 7, 11, 23 | circle on, sponsors on | winning a majority of validation games over 5 iterations |
 | generalise | 23 | one of five rule sets per game: cornucopia layout, ring layout, round arena, circle off, sponsors off | the same, on the stage's base rules |
 

@@ -28,9 +28,11 @@ def test_lessons_start_with_survival_and_end_with_generalisation():
     assert names[:2] == ["survive", "survive the rules"] and names[-1] == "generalise"
     assert [s.opponents for s in curriculum.stages] == [0, 0, 1, 3, 7, 11, 23, 23]
     assert curriculum.stage_spec.metric == "survival"
-    # Winning does not promote a survival lesson; surviving most of the game does.
+    # Winning does not promote a survival lesson; five half-game survivals sit below the 0.6 bar.
     assert not any(curriculum.observe(0.0, win_rate=1.0, survival=0.5) for _ in range(5))
-    assert [curriculum.observe(0.0, win_rate=0.0, survival=0.95) for _ in range(5)][-1] is True
+    # Surviving most of the game does: within five more iterations the window mean passes the bar.
+    promoted = [curriculum.observe(0.0, win_rate=0.0, survival=0.95) for _ in range(5)]
+    assert promoted.count(True) == 1 and curriculum.stage == 1
     assert curriculum.describe() == "survive the rules (0 opponents)"
     assert not curriculum.finished
 
