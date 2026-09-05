@@ -1,6 +1,7 @@
 # Results: every method to the win criterion, then the tournament
 
 **Run:** `results/full_methods_20260903_025758` (the `results/` folder is not in the repo; this folder keeps the report, the numbers and the charts).
+**Code:** git tag `exp1-methods` (see [../README.md](../README.md) for the tag scheme).
 **Command:** `experiments/run_full.sh`, first block:
 
 ```bash

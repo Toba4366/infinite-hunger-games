@@ -1,6 +1,7 @@
 # Results: weight initialisers
 
 **Run:** `results/initializers_20260903_143756`.
+**Code:** git tag `exp1-methods` (see [../README.md](../README.md) for the tag scheme).
 **Command:** `experiments/run_full.sh`, third block:
 
 ```bash

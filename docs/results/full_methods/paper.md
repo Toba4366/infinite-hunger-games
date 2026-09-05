@@ -1,6 +1,6 @@
 # Which way should a tribute learn? Imitation, evolution and policy gradients in a simulated Hunger Games
 
-*Experiment of 2026-09-03. Runs `full_methods_20260903_025758`, `sizes_20260903_135744` and `initializers_20260903_143756`, produced by `experiments/run_full.sh`. Every number in this paper is in [results.csv](results.csv), [analysis/stats.md](analysis/stats.md) and the sibling run folders; every chart is in this folder.*
+*Experiment of 2026-09-03. Runs `full_methods_20260903_025758`, `sizes_20260903_135744` and `initializers_20260903_143756`, produced by `experiments/run_full.sh` on the code tagged `exp1-methods` (the sweep in section 4.3 on `exp1-sweep`). Every number in this paper is in [results.csv](results.csv), [analysis/stats.md](analysis/stats.md) and the sibling run folders; every chart is in this folder.*
 
 ## Abstract
 

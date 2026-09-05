@@ -10,4 +10,20 @@
 | [initializers/README.md](initializers/README.md) | `results/initializers_20260903_143756` | Xavier uniform, He uniform and all-zero starting weights through imitation and warm PPO: why zeros never learn, and which initialiser fine-tunes best |
 | [sensitivity/README.md](sensitivity/README.md) | `results/sensitivity_20260903_153031` | Cold REINFORCE and PPO over learning rate, entropy bonus and episodes per epoch: which settings a cold start needs, and why the defaults suit warm starts |
 
+## Versions and tags
+
+Two kinds of git tags keep the write-ups reproducible:
+
+- **Release tags** `vX.Y.Z` mark the commits the changelog headings describe (`v0.7.0` is the first paper's code).
+- **Experiment tags** `expN-<name>` mark the exact code an experiment ran on, so a page's numbers can be regenerated from the tagged tree with the command it quotes. `git checkout exp1-methods` gives the code of the first experiment; `git diff exp1-methods exp2-lessons -- hunger_games` shows what changed between two experiments.
+
+| Tag | Commit | What ran on it |
+| --- | --- | --- |
+| `exp1-methods` | `b28469f` | `full_methods`, `sizes`, `initializers` (2026-09-03) |
+| `exp1-sweep` | `281dda6` | `sensitivity` (2026-09-03) |
+| `v0.7.0` | `f7fa886` | The first paper and the tooling it used |
+| `exp2-lessons` | `ba0a958` | `lessons_methods` and `lessons_sizes` (started 2026-09-03 20:19) |
+
+Every results page names its tag. When a new experiment starts, tag the commit it runs on before the write-up; when a changelog block ships, tag the release.
+
 Each run page states the exact command, the machine, the tables, the claims the run supports, and its limitations; each has an `analysis/` subfolder written by `experiments/analyze_comparison.py` (Wilson intervals, Fisher tests, trend slopes, smoothed curves) and, for the main run, a `gifs/` subfolder written by `experiments/render_champions.py`. The paper draws on all of them. To reproduce a run, use the command on its page; the run folder it writes has the same file names as the page's copies. See [../research/README.md](../research/README.md) for how the experiments are designed and [../output.md](../output.md) for what every file in a run folder means.

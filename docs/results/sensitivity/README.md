@@ -1,6 +1,7 @@
 # Results: the cold-start sensitivity sweep
 
 **Run:** `results/sensitivity_20260903_153031`.
+**Code:** git tag `exp1-sweep` (see [../README.md](../README.md) for the tag scheme).
 **Command:** `experiments/run_sensitivity.sh`:
 
 ```bash

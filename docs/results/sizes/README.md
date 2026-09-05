@@ -1,6 +1,7 @@
 # Results: network sizes
 
 **Run:** `results/sizes_20260903_135744`.
+**Code:** git tag `exp1-methods` (see [../README.md](../README.md) for the tag scheme).
 **Command:** `experiments/run_full.sh`, second block:
 
 ```bash

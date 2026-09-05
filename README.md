@@ -137,6 +137,10 @@ Each writes `results/<name>_<timestamp>/` containing `config.json`,
 `champion.json`, and `plots/` with one PNG per chart plus a growing-curve
 GIF. The dashboard's Train and Research tabs write the same folders.
 
+## Versions and experiments
+
+Release tags `vX.Y.Z` match the changelog headings; experiment tags `expN-<name>` mark the exact code an experiment ran on, so every results page can be regenerated from its tag. The table of tags is in [docs/results/README.md](docs/results/README.md).
+
 ## Claims and evidence
 
 The claims above were tested on 2026-09-03 with `experiments/run_full.sh`: every

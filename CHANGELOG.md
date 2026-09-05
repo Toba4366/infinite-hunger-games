@@ -8,6 +8,12 @@ that way: whenever code, docs or defaults change, add a line under
 
 ## Unreleased
 
+### Added
+- Git tags for reproducibility: release tags (`v0.7.0`) and experiment tags
+  (`exp1-methods`, `exp1-sweep`, `exp2-lessons`) on the commits the
+  experiments ran on; every results page names its tag and
+  `docs/results/README.md` explains the scheme.
+
 ### Changed
 - The lesson curriculum's survival bars are measured rather than guessed:
   0.6 for "survive" and 0.3 for "survive the rules", the shares six copies
