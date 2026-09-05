@@ -24,3 +24,5 @@ output/*.gif
 
 # Local Claude Code harness: rules, hooks, commands and agents for this machine.
 .claude/
+# Reference documents kept next to the code but not published with it (transcripts, research briefs).
+*.docx
